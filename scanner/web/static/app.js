@@ -6,8 +6,37 @@ let pollTimer = null;
 let allFindings = [];
 let scanTimerInterval = null;
 let scanStartTime = null;
+let currentModalFindingIdx = null;  // For AI remediation in modal
 
 const MAX_THREADS = 10;
+
+
+
+// ── Toggle form inputs during scan ────────────────────────────
+function setFormDisabled(disabled) {
+  const ids = ['target', 'mode', 'threads', 'timeout', 'cookie'];
+  ids.forEach(id => { document.getElementById(id).disabled = disabled; });
+  // Selenium toggle stays enabled so user can flip it mid-scan
+}
+
+// ── Reset form for a fresh scan ─────────────────────────────────
+function resetScanForm() {
+  document.getElementById('target').value = '';
+  document.getElementById('mode').value = 'quick';
+  document.getElementById('threads').value = '5';
+  document.getElementById('timeout').value = '10';
+  document.getElementById('cookie').value = '';
+  document.getElementById('useBrowser').checked = false;
+  setFormDisabled(false);
+  const btn = document.getElementById('btnStart');
+  btn.disabled = false;
+  btn.textContent = 'Start Scan';
+  document.getElementById('btnCancel').style.display = 'none';
+  document.getElementById('progressCard').style.display = 'none';
+  document.getElementById('resultsPanel').style.display = 'none';
+  document.getElementById('totalTimeDisplay').style.display = 'none';
+  document.getElementById('target').focus();
+}
 
 // ── Live Timer Helper ───────────────────────────────────────────
 function formatDuration(seconds) {
@@ -43,6 +72,7 @@ document.querySelectorAll('.tab').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
 
+    if (btn.dataset.tab === 'scan') resetScanForm();
     if (btn.dataset.tab === 'history') loadHistory();
     if (btn.dataset.tab === 'owasp') loadOwaspRef();
     if (btn.dataset.tab === 'mitre') loadMitreRef();
@@ -72,9 +102,14 @@ document.getElementById('scanForm').addEventListener('submit', async (e) => {
     use_browser: document.getElementById('useBrowser').checked,
   };
 
+  // Remember initial browser toggle state
+  window._scanUseBrowser = body.use_browser;
+
   const btn = document.getElementById('btnStart');
   btn.disabled = true;
   btn.textContent = 'Scanning…';
+  setFormDisabled(true);
+  document.getElementById('btnCancel').style.display = 'inline-block';
   document.getElementById('progressCard').style.display = '';
   document.getElementById('resultsPanel').style.display = 'none';
   document.getElementById('progressStage').textContent = 'Initialising…';
@@ -103,6 +138,8 @@ document.getElementById('scanForm').addEventListener('submit', async (e) => {
     alert('Failed to start scan: ' + err.message);
     btn.disabled = false;
     btn.textContent = 'Start Scan';
+    setFormDisabled(false);
+    document.getElementById('btnCancel').style.display = 'none';
     stopScanTimer();
   }
 });
@@ -152,6 +189,8 @@ async function pollScan() {
       const btn = document.getElementById('btnStart');
       btn.disabled = false;
       btn.textContent = 'Start Scan';
+      setFormDisabled(false);
+      document.getElementById('btnCancel').style.display = 'none';
 
       if (data.status === 'completed' || (data.findings && data.findings.length > 0)) {
         showResults(data);
@@ -170,7 +209,37 @@ async function pollScan() {
     const btn = document.getElementById('btnStart');
     btn.disabled = false;
     btn.textContent = 'Start Scan';
+    setFormDisabled(false);
+    document.getElementById('btnCancel').style.display = 'none';
   }
+}
+
+// ── Selenium toggle mid-scan ──────────────────────────────────────
+document.getElementById('useBrowser').addEventListener('change', async () => {
+  if (!activeScanId) return; // not scanning, no need to patch
+  const val = document.getElementById('useBrowser').checked;
+  try {
+    await fetch(API + '/api/scan/' + activeScanId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_browser: val }),
+    });
+  } catch (e) { console.error('Failed to toggle browser:', e); }
+});
+
+// ── Cancel active scan ──────────────────────────────────────────
+async function cancelActiveScan() {
+  if (!activeScanId) return;
+  const cancelBtn = document.getElementById('btnCancel');
+  cancelBtn.disabled = true;
+  cancelBtn.textContent = 'Stopping…';
+  try {
+    await fetch(API + '/api/scan/' + activeScanId + '/cancel', { method: 'POST' });
+  } catch (err) {
+    console.error('Cancel failed:', err);
+  }
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = '⛔ Stop Scan';
 }
 
 // ── Show Results ────────────────────────────────────────────────
@@ -218,6 +287,14 @@ function showResults(data) {
 
   // MITRE ATT&CK breakdown — enhanced with confidence, matrix heatmap, attack paths
   renderMitreBreakdown(findings, data);
+
+  // Show AI cards (built-in AI integration)
+  document.getElementById('aiAnalysisCard').style.display = '';
+  document.getElementById('aiExecCard').style.display = '';
+  document.getElementById('aiAnalysisContent').innerHTML =
+    '<p class="ai-hint">Click "Generate AI Analysis" for an in-depth threat intelligence report powered by Gemini AI.</p>';
+  document.getElementById('aiExecContent').innerHTML =
+    '<p class="ai-hint">Click "Generate Summary" for a management-ready executive summary.</p>';
 
   // Findings table
   renderFindings(findings);
@@ -294,6 +371,12 @@ function applyFilters() {
 function showFindingModal(f) {
   document.getElementById('modalOverlay').style.display = '';
   document.getElementById('modalTitle').textContent = (f.type || f.module || 'Finding') + ' — ' + (f.severity || 'N/A');
+
+  // Track finding index for AI remediation
+  currentModalFindingIdx = allFindings.indexOf(f);
+  document.getElementById('modalAiContent').innerHTML = '';
+  const aiSection = document.getElementById('modalAiSection');
+  aiSection.style.display = '';
 
   // Build MITRE section with full details
   let mitreHtml = '-';
@@ -407,8 +490,13 @@ async function viewScan(scanId) {
     document.getElementById('progressStage').textContent = data.current_stage;
     document.getElementById('progressPct').textContent = data.progress + '%';
     document.getElementById('progressFill').style.width = data.progress + '%';
-    document.getElementById('elapsed').textContent = data.elapsed + 's';
     document.getElementById('findingsCount').textContent = data.findings_count || 0;
+
+    // Show elapsed time
+    const elapsedStr = (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled')
+      ? formatDuration(Math.round(data.elapsed))
+      : data.elapsed + 's';
+    document.getElementById('elapsed').textContent = elapsedStr;
 
     // Show stage chips
     const timeline = document.getElementById('stageTimeline');
@@ -416,13 +504,36 @@ async function viewScan(scanId) {
       `<span class="stage-chip done">${s.name} (${s.time}s)</span>`
     ).join('');
 
+    // Show total time for finished scans
+    const totalTimeEl = document.getElementById('totalTimeDisplay');
+    if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+      const statusLabel = data.status === 'completed' ? 'Scan completed' : data.status === 'cancelled' ? 'Scan cancelled' : 'Scan failed';
+      totalTimeEl.innerHTML = `<span class="total-time-icon">&#9201;</span> ${statusLabel} in <strong>${elapsedStr}</strong>`;
+      totalTimeEl.className = 'total-time-display status-' + data.status;
+      totalTimeEl.style.display = '';
+    } else {
+      totalTimeEl.style.display = 'none';
+    }
+
+    // Disable start button and form while viewing history
+    setFormDisabled(true);
+    const startBtn = document.getElementById('btnStart');
+    startBtn.disabled = true;
+    startBtn.textContent = 'Viewing History';
+    document.getElementById('btnCancel').style.display = 'none';
+
     // Show results if any findings exist (even for running/failed scans)
     if (data.findings && data.findings.length > 0) {
+      activeScanId = scanId;
       showResults(data);
     } else if (data.status === 'running') {
       // Still running — start polling
       activeScanId = scanId;
       startPolling();
+      startScanTimer();
+    } else {
+      // Completed/failed/cancelled with no findings
+      document.getElementById('resultsPanel').style.display = 'none';
     }
   } catch (err) {
     alert('Failed to load scan: ' + err.message);
@@ -473,6 +584,27 @@ async function renderMitreBreakdown(findings, scanData) {
   try {
     const mitreRes = await fetch(API + '/api/scan/' + (scanData.scan_id || activeScanId) + '/mitre');
     const mitreData = await mitreRes.json();
+
+    // 0. Threat Intelligence Narrative (target-personalised)
+    const narrative = mitreData.threat_narrative;
+    if (narrative && narrative.finding_count > 0) {
+      const card = document.getElementById('threatNarrativeCard');
+      card.style.display = '';
+      const badge = document.getElementById('riskBadge');
+      badge.className = 'risk-badge risk-' + narrative.risk_color;
+      badge.textContent = narrative.risk_level + ' RISK';
+      document.getElementById('threatNarrative').innerHTML = narrative.narrative;
+      // Meta chips
+      const metaEl = document.getElementById('threatMeta');
+      metaEl.innerHTML = `<span class="threat-chip"><strong>${narrative.finding_count}</strong> findings</span>`
+        + `<span class="threat-chip"><strong>${narrative.techniques_matched}</strong> techniques</span>`
+        + `<span class="threat-chip"><strong>${narrative.tactics_covered}/${14}</strong> tactics</span>`
+        + `<span class="threat-chip"><strong>${narrative.affected_endpoint_count}</strong> endpoints</span>`
+        + (narrative.vuln_types || []).map(v => `<span class="threat-chip type-chip">${escHtml(v)}</span>`).join('');
+    } else {
+      document.getElementById('threatNarrativeCard').style.display = 'none';
+    }
+
     const coverage = mitreData.matrix_coverage || {};
     const tactics = coverage.tactics || [];
 
@@ -511,8 +643,25 @@ async function renderMitreBreakdown(findings, scanData) {
           <span class="label"><a href="${escHtml(tech.url)}" target="_blank" rel="noopener">${escHtml(tech.technique_id)} — ${escHtml(tech.name)}</a></span>
           <span class="conf-dot ${confClass}" title="${tech.confidence || 'medium'} confidence"></span>
           <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--high)"></div></div>
-          <span class="count">${tech.finding_count}</span>
+          <div class="mitre-row-actions">
+            <span class="count">${tech.finding_count}</span>
+            <button class="btn-ai-mitre" onclick="event.stopPropagation();openMitreAiPanel('${escHtml(tech.technique_id)}','${escHtml(tech.name)}','${escHtml(tacGroup.tactic)}')" title="Ask AI about this technique">&#x1F9E0; Ask AI</button>
+          </div>
         </div>`;
+        // Per-technique evidence (affected URLs from target)
+        const evidence = tech.finding_evidence || [];
+        if (evidence.length) {
+          techHtml += '<div class="technique-evidence">';
+          for (const ev of evidence) {
+            const sevCls = (ev.severity || 'Low').toLowerCase();
+            techHtml += `<div class="evidence-item">
+              <span class="sev-dot-sm sev-${sevCls}"></span>
+              <span class="ev-url" title="${escHtml(ev.url)}">${escHtml(ev.url)}</span>
+              <span class="ev-detail" title="${escHtml(ev.detail)}">${escHtml(ev.detail)}</span>
+            </div>`;
+          }
+          techHtml += '</div>';
+        }
       }
       techHtml += '</div>';
     }
@@ -617,6 +766,7 @@ async function loadMitreRef() {
             ${subBadge}
             <span class="mitre-tname">${escHtml(t.name)}</span>
             <span class="weight-badge ${weightClass}">${t.severity_weight.toFixed(1)}</span>
+            <button class="btn-ai-mitre" onclick="event.stopPropagation();openMitreAiPanel('${escHtml(t.id)}','${escHtml(t.name)}','${escHtml(tactic)}')" title="Ask AI about this technique">&#x1F9E0;</button>
             <a href="${escHtml(t.url)}" target="_blank" rel="noopener" class="mrc-link" onclick="event.stopPropagation()">&#x2197;</a>
           </div>
           <div class="mrc-desc">${escHtml(t.description)}</div>
@@ -708,6 +858,112 @@ function _downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+// ── AI Functions ────────────────────────────────────────────────
+async function aiAnalyze() {
+  if (!activeScanId) { alert('No active scan to analyse.'); return; }
+  const btn = document.getElementById('btnAiAnalyze');
+  const content = document.getElementById('aiAnalysisContent');
+  btn.disabled = true; btn.textContent = '⏳ Analysing...';
+  content.innerHTML = '<div class="ai-loading"><div class="spinner"></div><span>AI is analysing your scan results...</span></div>';
+  try {
+    const res = await fetch(API + '/api/ai/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scan_id: activeScanId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'AI request failed');
+    }
+    const data = await res.json();
+    content.innerHTML = '<div class="ai-response">' + data.analysis + '</div>';
+  } catch (err) {
+    content.innerHTML = '<div class="ai-error">AI analysis failed: ' + escHtml(err.message) + '</div>';
+  }
+  btn.disabled = false; btn.textContent = '✨ Generate AI Analysis';
+}
+
+async function aiExecutiveSummary() {
+  if (!activeScanId) { alert('No active scan.'); return; }
+  const btn = document.getElementById('btnAiExec');
+  const content = document.getElementById('aiExecContent');
+  btn.disabled = true; btn.textContent = '⏳ Generating...';
+  content.innerHTML = '<div class="ai-loading"><div class="spinner"></div><span>AI is preparing an executive summary...</span></div>';
+  try {
+    const res = await fetch(API + '/api/ai/executive-summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scan_id: activeScanId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'AI request failed');
+    }
+    const data = await res.json();
+    content.innerHTML = '<div class="ai-response">' + data.summary + '</div>';
+  } catch (err) {
+    content.innerHTML = '<div class="ai-error">AI summary failed: ' + escHtml(err.message) + '</div>';
+  }
+  btn.disabled = false; btn.textContent = '✨ Generate Summary';
+}
+
+async function aiRemediateModal() {
+  if (!activeScanId || currentModalFindingIdx == null || currentModalFindingIdx < 0) {
+    alert('No finding selected.'); return;
+  }
+  const btn = document.getElementById('btnAiRemediate');
+  const content = document.getElementById('modalAiContent');
+  btn.disabled = true; btn.textContent = '⏳ Generating...';
+  content.innerHTML = '<div class="ai-loading"><div class="spinner"></div><span>AI is generating remediation guidance...</span></div>';
+  try {
+    const res = await fetch(API + '/api/ai/remediate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scan_id: activeScanId, finding_index: currentModalFindingIdx }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'AI request failed');
+    }
+    const data = await res.json();
+    content.innerHTML = '<div class="ai-response">' + data.remediation + '</div>';
+  } catch (err) {
+    content.innerHTML = '<div class="ai-error">AI remediation failed: ' + escHtml(err.message) + '</div>';
+  }
+  btn.disabled = false; btn.textContent = '🧠 AI Remediation Guide';
+}
+
+// ── PDF / DOCX Downloads ────────────────────────────────────────
+async function downloadPDF() {
+  if (!activeScanId) { alert('No scan to export.'); return; }
+  try {
+    const res = await fetch(API + '/api/scan/' + activeScanId + '/report/pdf');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'PDF generation failed');
+    }
+    const blob = await res.blob();
+    _downloadBlob(blob, 'PentaVault_Report.pdf');
+  } catch (err) {
+    alert('PDF download failed: ' + err.message);
+  }
+}
+
+async function downloadDOCX() {
+  if (!activeScanId) { alert('No scan to export.'); return; }
+  try {
+    const res = await fetch(API + '/api/scan/' + activeScanId + '/report/docx');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'DOCX generation failed');
+    }
+    const blob = await res.blob();
+    _downloadBlob(blob, 'PentaVault_Report.docx');
+  } catch (err) {
+    alert('DOCX download failed: ' + err.message);
+  }
+}
+
 // ── Utility ─────────────────────────────────────────────────────
 function escHtml(str) {
   if (!str) return '';
@@ -715,3 +971,120 @@ function escHtml(str) {
   div.textContent = String(str);
   return div.innerHTML;
 }
+
+// ── MITRE AI Explain Panel ──────────────────────────────────────
+let _mitreAiTechId = '';
+let _mitreAiTechName = '';
+let _mitreAiTactic = '';
+
+function openMitreAiPanel(techId, techName, tactic) {
+  _mitreAiTechId = techId;
+  _mitreAiTechName = techName;
+  _mitreAiTactic = tactic;
+
+  document.getElementById('mitreAiTitle').textContent = techId + ' — ' + techName;
+  document.getElementById('mitreAiSubtitle').textContent = 'Tactic: ' + tactic + '  |  Personalized AI analysis in the context of your scan';
+  document.getElementById('mitreAiContent').innerHTML = '';
+  document.getElementById('mitreAiQuestion').value = '';
+  document.getElementById('mitreAiOverlay').style.display = 'flex';
+
+  // Auto-generate initial explanation
+  _callMitreAiExplain(null, true);
+}
+
+function closeMitreAiPanel() {
+  document.getElementById('mitreAiOverlay').style.display = 'none';
+}
+
+// Close on overlay click
+document.addEventListener('click', function(e) {
+  if (e.target.id === 'mitreAiOverlay') closeMitreAiPanel();
+});
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('mitreAiOverlay').style.display !== 'none') {
+    closeMitreAiPanel();
+  }
+});
+
+async function _callMitreAiExplain(question, isInitial) {
+  if (!activeScanId) { alert('No active scan.'); return; }
+  const content = document.getElementById('mitreAiContent');
+  const btn = document.getElementById('btnMitreAiAsk');
+
+  if (isInitial) {
+    content.innerHTML = '<div class="ai-loading"><div class="spinner"></div><span>AI is analyzing ' + escHtml(_mitreAiTechId) + ' in the context of your scan...</span></div>';
+  } else {
+    // Append loading below existing content
+    const historyDiv = document.createElement('div');
+    historyDiv.className = 'mitre-ai-history';
+    historyDiv.innerHTML = '<div class="mitre-ai-q">' + escHtml(question) + '</div>'
+      + '<div class="mitre-ai-a"><div class="ai-loading"><div class="spinner"></div><span>AI is thinking...</span></div></div>';
+    content.appendChild(historyDiv);
+    // Scroll to the new question
+    historyDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + '/api/ai/mitre-explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scan_id: activeScanId,
+        technique_id: _mitreAiTechId,
+        technique_name: _mitreAiTechName,
+        tactic: _mitreAiTactic,
+        question: question || '',
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'AI request failed');
+    }
+    const data = await res.json();
+    if (isInitial) {
+      content.innerHTML = '<div class="ai-response">' + data.explanation + '</div>';
+    } else {
+      // Replace the loading in the last history entry
+      const lastA = content.querySelector('.mitre-ai-history:last-child .mitre-ai-a');
+      if (lastA) {
+        lastA.innerHTML = '<div class="ai-response">' + data.explanation + '</div>';
+      }
+    }
+  } catch (err) {
+    const errHtml = '<div class="ai-error">AI explain failed: ' + escHtml(err.message) + '</div>';
+    if (isInitial) {
+      content.innerHTML = errHtml;
+    } else {
+      const lastA = content.querySelector('.mitre-ai-history:last-child .mitre-ai-a');
+      if (lastA) lastA.innerHTML = errHtml;
+    }
+  }
+  btn.disabled = false;
+}
+
+function askMitreAiFollowup() {
+  const input = document.getElementById('mitreAiQuestion');
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+  _callMitreAiExplain(q, false);
+}
+
+function askMitreAiSuggestion(el) {
+  const q = el.textContent.trim();
+  document.getElementById('mitreAiQuestion').value = '';
+  _callMitreAiExplain(q, false);
+}
+
+// Allow Enter key in the question input
+document.addEventListener('DOMContentLoaded', function() {
+  const qInput = document.getElementById('mitreAiQuestion');
+  if (qInput) {
+    qInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); askMitreAiFollowup(); }
+    });
+  }
+});
