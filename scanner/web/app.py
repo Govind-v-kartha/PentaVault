@@ -22,9 +22,17 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+# ── Server-side Gemini API keys (auto-failover on rate limits) ────
+_GEMINI_API_KEYS = [
+    "AIzaSyCM5FrrJrIOatrHTpjQ4pd5rTjo64jWWqg",
+    "AIzaSyC6Q2o0vgTT2Y8HtL9BhVfIQg6BfEV5CWY",
+    "AIzaSyCMrL8CrHab6aow4mKX0pO5-VPT3ozLi5U",
+    "AIzaSyDSQZJTuvIYMifS-W62rTxjmjRXmWiif5w",
+]
 
 # Ensure scanner package is importable
 _WEB_DIR = Path(__file__).resolve().parent
@@ -37,8 +45,10 @@ from scanner.utils.logger import setup_logger, get_logger
 from scanner.utils.report_exporter import export_json, _build_summary, OWASP_2025
 from scanner.utils.mitre_mapping import (
     MITRE_TECHNIQUES, build_mitre_breakdown, build_attack_paths,
-    compute_matrix_coverage, get_all_tactics,
+    compute_matrix_coverage, get_all_tactics, build_threat_narrative,
 )
+from scanner.utils.ai_engine import ai_threat_analysis, ai_remediation, ai_executive_summary, ai_mitre_explain
+from scanner.utils.pdf_report import generate_pdf, generate_docx
 from scanner.core.recon import run_recon
 from scanner.core.port_scanner import scan_ports
 from scanner.core.fingerprint import run_fingerprint
@@ -71,8 +81,41 @@ app.add_middleware(
 STATIC_DIR = _WEB_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ── In-memory scan store ────────────────────────────────────────────
-scans: dict[str, dict[str, Any]] = {}
+# ── Scan store with disk persistence ────────────────────────────────
+DATA_DIR = _SCANNER_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+_HISTORY_FILE = DATA_DIR / "scan_history.json"
+
+
+def _load_history() -> dict[str, dict[str, Any]]:
+    """Load persisted scan history from disk."""
+    if _HISTORY_FILE.exists():
+        try:
+            with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            log.info("Loaded %d scans from history", len(data))
+            return data
+        except Exception as exc:
+            log.warning("Failed to load scan history: %s", exc)
+    return {}
+
+
+def _save_history() -> None:
+    """Persist completed/failed/cancelled scans to disk."""
+    try:
+        persistable = {}
+        for sid, s in scans.items():
+            if s.get("status") in ("completed", "failed", "cancelled"):
+                # Shallow copy, drop non-serialisable transient keys
+                entry = {k: v for k, v in s.items() if not k.startswith("_")}
+                persistable[sid] = entry
+        with open(_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(persistable, f, default=str)
+    except Exception as exc:
+        log.warning("Failed to save scan history: %s", exc)
+
+
+scans: dict[str, dict[str, Any]] = _load_history()
 
 
 # ── Pydantic models ────────────────────────────────────────────────
@@ -116,6 +159,17 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
     scan["url"] = url
 
     try:
+        # ── Connectivity pre-check ──────────────────────────────
+        if is_url:
+            import httpx as _hx
+            try:
+                _hx.get(url, timeout=15, verify=False, follow_redirects=True)
+            except Exception as exc:
+                scan["status"] = "error"
+                scan["error"] = f"Target unreachable: {exc}"
+                log.error("[%s] Target unreachable: %s", scan_id[:8], exc)
+                return
+
         # ── Stage 1: Target Input ───────────────────────────────
         scan["current_stage"] = "Target Input"
         scan["progress"] = 5
@@ -161,7 +215,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             scan["progress"] = 30
             t0 = time.monotonic()
 
-            if req.use_browser:
+            use_browser = scan.get("use_browser", req.use_browser)
+            if use_browser:
                 from scanner.core.selenium_crawler import selenium_crawl
                 crawl_result = selenium_crawl(
                     url,
@@ -177,11 +232,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                     max_pages=50 if req.mode == "quick" else 200,
                     cookie=req.cookie,
                     timeout=req.timeout,
+                    respect_robots=(req.mode == "quick"),
                 )
             endpoints = crawl_result.endpoints
             forms = crawl_result.forms
             crawl_summary = crawl_result.summary()
-            crawler_label = "Selenium Crawler" if req.use_browser else "Crawler"
+            crawler_label = "Selenium Crawler" if use_browser else "Crawler"
             scan["stages"].append({"name": crawler_label, "time": round(time.monotonic() - t0, 1)})
             scan["crawl_summary"] = crawl_summary
 
@@ -203,7 +259,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 ("Open Redirect", lambda: test_open_redirect(endpoints, cookie=req.cookie, timeout=req.timeout)),
             ]
 
-            if req.use_browser:
+            use_browser_vuln = scan.get("use_browser", req.use_browser)
+            if use_browser_vuln:
                 from scanner.modules.sqli_selenium import test_sqli_selenium
                 from scanner.modules.xss_selenium import test_xss_selenium
                 modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=(req.mode == "quick"), evidence_dir="evidence"))
@@ -342,12 +399,14 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
         scan["findings_count"] = len(all_findings)
         log.info("[%s] Scan complete — %d findings", scan_id[:8], len(all_findings))
+        _save_history()
 
     except Exception as exc:
         scan["status"] = "failed"
         scan["current_stage"] = f"Error: {exc}"
         scan["error"] = str(exc)
         log.error("[%s] Scan failed: %s", scan_id[:8], exc, exc_info=True)
+        _save_history()
 
 
 # ── API Endpoints ──────────────────────────────────────────────────
@@ -441,7 +500,20 @@ async def delete_scan(scan_id: str):
     if scan_id not in scans:
         raise HTTPException(status_code=404, detail="Scan not found")
     del scans[scan_id]
+    _save_history()
     return {"deleted": True}
+
+
+@app.patch("/api/scan/{scan_id}")
+async def update_scan_config(scan_id: str, body: dict):
+    """Update mutable scan options (e.g. use_browser) while running."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[scan_id]
+    if "use_browser" in body:
+        scan["use_browser"] = bool(body["use_browser"])
+        log.info("[%s] Selenium toggled to %s mid-scan", scan_id[:8], scan["use_browser"])
+    return {"updated": True}
 
 
 @app.post("/api/scan/{scan_id}/cancel")
@@ -458,6 +530,7 @@ async def cancel_scan(scan_id: str):
     # Mark as cancelled so _run_scan can check and exit early
     scan["_cancel"] = True
     log.info("[%s] Scan cancelled by user", scan_id[:8])
+    _save_history()
     return {"cancelled": True}
 
 
@@ -485,10 +558,17 @@ async def get_mitre_breakdown(scan_id: str):
     if scan_id not in scans:
         raise HTTPException(status_code=404, detail="Scan not found")
     findings = scans[scan_id].get("findings", [])
+    target = scans[scan_id].get("target", "")
+    breakdown = build_mitre_breakdown(findings)
+    attack_paths = build_attack_paths(findings)
+    coverage = compute_matrix_coverage(findings)
+    narrative = build_threat_narrative(target, findings, breakdown, coverage)
     return {
-        "mitre_breakdown": build_mitre_breakdown(findings),
-        "attack_paths": build_attack_paths(findings),
-        "matrix_coverage": compute_matrix_coverage(findings),
+        "target": target,
+        "threat_narrative": narrative,
+        "mitre_breakdown": breakdown,
+        "attack_paths": attack_paths,
+        "matrix_coverage": coverage,
     }
 
 
@@ -501,6 +581,167 @@ async def get_evidence(filename: str):
     if not evidence_path.exists() or not evidence_path.is_file():
         raise HTTPException(status_code=404, detail="Evidence file not found")
     return FileResponse(str(evidence_path), media_type="image/png")
+
+
+# ── AI Endpoints ───────────────────────────────────────────────────
+
+class AIRequest(BaseModel):
+    scan_id: str
+    finding_index: int | None = None  # for per-finding remediation
+
+
+class MitreExplainRequest(BaseModel):
+    scan_id: str
+    technique_id: str
+    technique_name: str = ""
+    tactic: str = ""
+    question: str = ""
+
+
+@app.post("/api/ai/analyze")
+async def ai_analyze(req: AIRequest):
+    """Generate AI threat analysis for a completed scan."""
+    if req.scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[req.scan_id]
+    findings = scan.get("findings", [])
+    if not findings:
+        raise HTTPException(status_code=400, detail="No findings to analyse")
+    breakdown = build_mitre_breakdown(findings)
+    coverage = compute_matrix_coverage(findings)
+    try:
+        result = ai_threat_analysis(_GEMINI_API_KEYS, scan, findings, breakdown, coverage)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+    return {"analysis": result}
+
+
+@app.post("/api/ai/remediate")
+async def ai_remediate(req: AIRequest):
+    """Generate AI remediation guidance for a specific finding."""
+    if req.scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[req.scan_id]
+    findings = scan.get("findings", [])
+    idx = req.finding_index
+    if idx is None or idx < 0 or idx >= len(findings):
+        raise HTTPException(status_code=400, detail="Invalid finding index")
+    try:
+        result = ai_remediation(_GEMINI_API_KEYS, findings[idx], scan)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+    return {"remediation": result}
+
+
+@app.post("/api/ai/executive-summary")
+async def ai_exec_summary(req: AIRequest):
+    """Generate an AI-powered executive summary."""
+    if req.scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[req.scan_id]
+    findings = scan.get("findings", [])
+    try:
+        result = ai_executive_summary(_GEMINI_API_KEYS, scan, findings)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+    scan["_ai_executive_summary"] = result
+    return {"summary": result}
+
+
+@app.post("/api/ai/mitre-explain")
+async def ai_mitre_explain_endpoint(req: MitreExplainRequest):
+    """Generate AI explanation of a MITRE ATT&CK technique in scan context."""
+    if req.scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[req.scan_id]
+    findings = scan.get("findings", [])
+    try:
+        result = ai_mitre_explain(
+            _GEMINI_API_KEYS,
+            req.technique_id,
+            req.technique_name,
+            req.tactic,
+            scan,
+            findings,
+            req.question or None,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+    return {"explanation": result}
+
+
+# ── Report Download Endpoints ──────────────────────────────────────
+
+@app.get("/api/scan/{scan_id}/report/pdf")
+async def download_pdf(scan_id: str):
+    """Download professional PDF report."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[scan_id]
+    findings = scan.get("findings", [])
+    target = scan.get("target", "Unknown")
+    # Build MITRE data
+    mitre_data = None
+    if findings:
+        breakdown = build_mitre_breakdown(findings)
+        attack_paths = build_attack_paths(findings)
+        coverage = compute_matrix_coverage(findings)
+        narrative = build_threat_narrative(target, findings, breakdown, coverage)
+        mitre_data = {
+            "mitre_breakdown": breakdown,
+            "attack_paths": attack_paths,
+            "matrix_coverage": coverage,
+            "threat_narrative": narrative,
+        }
+    # Get AI summary if cached
+    ai_summary = scan.get("_ai_executive_summary")
+    try:
+        pdf_bytes = bytes(generate_pdf(target, findings, scan, mitre_data, ai_summary))
+    except Exception as exc:
+        log.error("PDF generation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {exc}")
+    safe_target = "".join(c if c.isalnum() or c in "-_." else "_" for c in target[:30])
+    filename = f"PentaVault_Report_{safe_target}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/scan/{scan_id}/report/docx")
+async def download_docx(scan_id: str):
+    """Download professional DOCX report."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[scan_id]
+    findings = scan.get("findings", [])
+    target = scan.get("target", "Unknown")
+    mitre_data = None
+    if findings:
+        breakdown = build_mitre_breakdown(findings)
+        attack_paths = build_attack_paths(findings)
+        coverage = compute_matrix_coverage(findings)
+        narrative = build_threat_narrative(target, findings, breakdown, coverage)
+        mitre_data = {
+            "mitre_breakdown": breakdown,
+            "attack_paths": attack_paths,
+            "matrix_coverage": coverage,
+            "threat_narrative": narrative,
+        }
+    ai_summary = scan.get("_ai_executive_summary")
+    try:
+        docx_bytes = bytes(generate_docx(target, findings, scan, mitre_data, ai_summary))
+    except Exception as exc:
+        log.error("DOCX generation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"DOCX generation failed: {exc}")
+    safe_target = "".join(c if c.isalnum() or c in "-_." else "_" for c in target[:30])
+    filename = f"PentaVault_Report_{safe_target}.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── Entry point ────────────────────────────────────────────────────
