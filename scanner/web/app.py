@@ -61,7 +61,7 @@ from scanner.modules.ssrf import test_ssrf
 from scanner.modules.idor import test_idor
 from scanner.modules.open_redirect import test_open_redirect
 
-setup_logger()
+setup_logger(log_dir=os.environ.get("PENTAVAULT_LOGS_DIR", "logs"))
 log = get_logger("web")
 
 app = FastAPI(
@@ -81,9 +81,12 @@ app.add_middleware(
 STATIC_DIR = _WEB_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# ── Vercel detection ────────────────────────────────────────────────
+_IS_VERCEL = bool(os.environ.get("VERCEL"))
+
 # ── Scan store with disk persistence ────────────────────────────────
-DATA_DIR = _SCANNER_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR = Path(os.environ.get("PENTAVAULT_DATA_DIR", str(_SCANNER_DIR / "data")))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 _HISTORY_FILE = DATA_DIR / "scan_history.json"
 
 
@@ -427,8 +430,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         # ── Stage 7: Report Generation ──────────────────────────
         scan["current_stage"] = "Report Generation"
         scan["progress"] = 90
-        output_path = f"reports/scan_{scan_id[:8]}.json"
-        os.makedirs("reports", exist_ok=True)
+        reports_dir = os.environ.get("PENTAVAULT_REPORTS_DIR", "reports")
+        output_path = f"{reports_dir}/scan_{scan_id[:8]}.json"
+        os.makedirs(reports_dir, exist_ok=True)
         export_json(
             target=url,
             findings=all_findings,
@@ -470,6 +474,12 @@ async def root():
 @app.post("/api/scan", response_model=dict)
 async def start_scan(req: ScanRequest):
     """Launch a new vulnerability scan."""
+    if _IS_VERCEL:
+        raise HTTPException(
+            status_code=503,
+            detail="Live scanning is unavailable on the Vercel deployment. "
+                   "Run PentaVault locally for active scanning.",
+        )
     scan_id = str(uuid.uuid4())
     scans[scan_id] = {
         "scan_id": scan_id,

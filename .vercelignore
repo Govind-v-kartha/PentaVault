@@ -1,0 +1,22 @@
+# Ignore large/unnecessary files from Vercel deployment bundle
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.venv/
+venv/
+node_modules/
+
+# Logs and evidence screenshots (not needed for the web dashboard)
+logs/
+evidence/
+
+# Test files
+test_target.py
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
