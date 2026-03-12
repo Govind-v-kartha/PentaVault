@@ -44,6 +44,7 @@ def test_open_redirect(
     endpoints: list[str],
     cookie: str | None = None,
     timeout: float = 10.0,
+    quick: bool = False,
 ) -> list[dict[str, Any]]:
     """Test URL-like GET parameters for open redirect vulnerabilities.
 
@@ -54,6 +55,10 @@ def test_open_redirect(
     headers: dict[str, str] = {}
     if cookie:
         headers["Cookie"] = cookie
+
+    # In quick mode, limit scope
+    if quick:
+        endpoints = endpoints[:15]
 
     with httpx.Client(
         verify=False,

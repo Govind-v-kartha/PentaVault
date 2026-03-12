@@ -44,6 +44,7 @@ def test_idor(
     cookie: str | None = None,
     timeout: float = 10.0,
     id_offset: int = 5,
+    quick: bool = False,
 ) -> list[dict[str, Any]]:
     """Test for IDOR by incrementing/decrementing numeric IDs in endpoint paths.
 
@@ -53,6 +54,11 @@ def test_idor(
     headers: dict[str, str] = {}
     if cookie:
         headers["Cookie"] = cookie
+
+    # In quick mode, limit scope
+    if quick:
+        endpoints = endpoints[:15]
+        id_offset = min(id_offset, 2)
 
     tested: set[str] = set()
 

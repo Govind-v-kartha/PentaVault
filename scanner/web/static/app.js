@@ -318,7 +318,7 @@ function renderFindings(findings) {
   tbody.innerHTML = findings.map((f, i) => {
     const sev = f.severity || 'None';
     const cvss = f.cvss_score != null ? f.cvss_score.toFixed(1) : '-';
-    const path = f.url || f.path || '-';
+    const path = f.affected_url || f.url || f.path || '-';
     const shortPath = path.length > 60 ? '...' + path.slice(-57) : path;
     const owasp = (f.owasp_category || '').replace(/^(A\d+):?\d*\s*-?\s*/, '$1 - ').substring(0, 35);
     const detail = f.detail || f.payload || f.issue || '-';
@@ -330,7 +330,7 @@ function renderFindings(findings) {
 
     return `<tr data-idx="${i}">
       <td><span class="sev-badge sev-${sev}">${sev}</span></td>
-      <td>${escHtml(f.type || f.module || '-')}</td>
+      <td>${escHtml(f.title || f.type || f.module || '-')}</td>
       <td title="${escHtml(path)}">${escHtml(shortPath)}</td>
       <td>${escHtml(owasp)}</td>
       <td class="mitre-cell" title="${escHtml(mitreTxt)}">${confDot}${escHtml(mitreTxt.length > 30 ? mitreTxt.substring(0, 27) + '...' : mitreTxt)}</td>
@@ -370,7 +370,7 @@ function applyFilters() {
 // ── Finding Modal ───────────────────────────────────────────────
 function showFindingModal(f) {
   document.getElementById('modalOverlay').style.display = '';
-  document.getElementById('modalTitle').textContent = (f.type || f.module || 'Finding') + ' — ' + (f.severity || 'N/A');
+  document.getElementById('modalTitle').textContent = (f.title || f.type || f.module || 'Finding') + ' — ' + (f.severity || 'N/A');
 
   // Track finding index for AI remediation
   currentModalFindingIdx = allFindings.indexOf(f);
@@ -405,12 +405,12 @@ function showFindingModal(f) {
     ['OWASP Category', f.owasp_category || '-'],
     ['MITRE ATT&CK', mitreHtml],
     ['Kill Chain', (f.mitre_kill_chain || []).join(' → ') || '-'],
-    ['URL / Path', f.url || f.path || '-'],
+    ['URL / Path', f.affected_url || f.url || f.path || '-'],
     ['Parameter', f.parameter || f.param || '-'],
-    ['Detail', f.detail || f.issue || '-'],
+    ['Detail', f.detail || f.issue || f.title || '-'],
     ['Payload', f.payload ? `<pre>${escHtml(f.payload)}</pre>` : '-'],
     ['Evidence', f.evidence || '-'],
-    ['Recommendation', f.recommendation || '-'],
+    ['Recommendation', f.remediation || f.recommendation || '-'],
   ];
 
   let html = fields.map(([label, val]) =>
@@ -800,17 +800,17 @@ function downloadCSV() {
   const headers = ['Severity', 'Type', 'URL', 'OWASP Category', 'MITRE ATT&CK', 'CVSS Score', 'CVSS Vector', 'Parameter', 'Detail', 'Payload', 'Evidence', 'Recommendation'];
   const rows = allFindings.map(f => [
     f.severity || '',
-    f.type || f.module || '',
-    f.url || f.path || '',
+    f.title || f.type || f.module || '',
+    f.affected_url || f.url || f.path || '',
     f.owasp_category || '',
     (f.mitre_attack || []).map(mt => mt.technique + ' ' + mt.name).join('; '),
     f.cvss_score != null ? f.cvss_score : '',
     f.cvss_vector || '',
     f.parameter || f.param || '',
-    f.detail || f.issue || '',
+    f.detail || f.issue || f.title || '',
     f.payload || '',
     f.evidence || '',
-    f.recommendation || '',
+    f.remediation || f.recommendation || '',
   ]);
   const csvContent = [headers, ...rows]
     .map(row => row.map(cell => '"' + String(cell).replace(/"/g, '""') + '"').join(','))
@@ -828,17 +828,17 @@ function downloadTXT() {
     lines.push('Finding #' + (i + 1));
     lines.push('-'.repeat(70));
     lines.push('Severity      : ' + (f.severity || 'N/A'));
-    lines.push('Type          : ' + (f.type || f.module || 'N/A'));
-    lines.push('URL           : ' + (f.url || f.path || 'N/A'));
+    lines.push('Type          : ' + (f.title || f.type || f.module || 'N/A'));
+    lines.push('URL           : ' + (f.affected_url || f.url || f.path || 'N/A'));
     lines.push('OWASP         : ' + (f.owasp_category || 'N/A'));
     lines.push('MITRE ATT&CK  : ' + ((f.mitre_attack || []).map(mt => mt.technique + ' — ' + mt.name).join(', ') || 'N/A'));
     lines.push('CVSS Score    : ' + (f.cvss_score != null ? f.cvss_score : 'N/A'));
     lines.push('CVSS Vector   : ' + (f.cvss_vector || 'N/A'));
     lines.push('Parameter     : ' + (f.parameter || f.param || 'N/A'));
-    lines.push('Detail        : ' + (f.detail || f.issue || 'N/A'));
+    lines.push('Detail        : ' + (f.detail || f.issue || f.title || 'N/A'));
     lines.push('Payload       : ' + (f.payload || 'N/A'));
     lines.push('Evidence      : ' + (f.evidence || 'N/A'));
-    lines.push('Recommendation: ' + (f.recommendation || 'N/A'));
+    lines.push('Recommendation: ' + (f.remediation || f.recommendation || 'N/A'));
     lines.push('');
   });
   lines.push(divider);
@@ -876,7 +876,7 @@ async function aiAnalyze() {
       throw new Error(err.detail || 'AI request failed');
     }
     const data = await res.json();
-    content.innerHTML = '<div class="ai-response">' + data.analysis + '</div>';
+    content.innerHTML = '<div class="ai-response">' + sanitizeAiHtml(data.analysis) + '</div>';
   } catch (err) {
     content.innerHTML = '<div class="ai-error">AI analysis failed: ' + escHtml(err.message) + '</div>';
   }
@@ -900,7 +900,7 @@ async function aiExecutiveSummary() {
       throw new Error(err.detail || 'AI request failed');
     }
     const data = await res.json();
-    content.innerHTML = '<div class="ai-response">' + data.summary + '</div>';
+    content.innerHTML = '<div class="ai-response">' + sanitizeAiHtml(data.summary) + '</div>';
   } catch (err) {
     content.innerHTML = '<div class="ai-error">AI summary failed: ' + escHtml(err.message) + '</div>';
   }
@@ -926,7 +926,7 @@ async function aiRemediateModal() {
       throw new Error(err.detail || 'AI request failed');
     }
     const data = await res.json();
-    content.innerHTML = '<div class="ai-response">' + data.remediation + '</div>';
+    content.innerHTML = '<div class="ai-response">' + sanitizeAiHtml(data.remediation) + '</div>';
   } catch (err) {
     content.innerHTML = '<div class="ai-error">AI remediation failed: ' + escHtml(err.message) + '</div>';
   }
@@ -970,6 +970,22 @@ function escHtml(str) {
   const div = document.createElement('div');
   div.textContent = String(str);
   return div.innerHTML;
+}
+
+/**
+ * Sanitize trusted HTML from AI responses by stripping dangerous elements
+ * (script, iframe, object, embed, form) and event handler attributes (on*).
+ * Preserves safe formatting tags (strong, em, code, pre, ul, ol, li, br, a, p, div, span, h1-h6, table, tr, td, th).
+ */
+function sanitizeAiHtml(html) {
+  if (!html) return '';
+  // Remove script/iframe/object/embed/form tags and their content
+  let clean = html.replace(/<\s*\/?\s*(script|iframe|object|embed|form|style|link|meta|base)\b[^>]*>/gi, '');
+  // Remove on* event handler attributes (onerror, onclick, onload, etc.)
+  clean = clean.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+  // Remove javascript: protocol in href/src
+  clean = clean.replace(/(href|src)\s*=\s*(?:"|')javascript:[^"']*(?:"|')/gi, '$1=""');
+  return clean;
 }
 
 // ── MITRE AI Explain Panel ──────────────────────────────────────
@@ -1045,12 +1061,12 @@ async function _callMitreAiExplain(question, isInitial) {
     }
     const data = await res.json();
     if (isInitial) {
-      content.innerHTML = '<div class="ai-response">' + data.explanation + '</div>';
+      content.innerHTML = '<div class="ai-response">' + sanitizeAiHtml(data.explanation) + '</div>';
     } else {
       // Replace the loading in the last history entry
       const lastA = content.querySelector('.mitre-ai-history:last-child .mitre-ai-a');
       if (lastA) {
-        lastA.innerHTML = '<div class="ai-response">' + data.explanation + '</div>';
+        lastA.innerHTML = '<div class="ai-response">' + sanitizeAiHtml(data.explanation) + '</div>';
       }
     }
   } catch (err) {

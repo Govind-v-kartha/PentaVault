@@ -19,6 +19,7 @@
       <button type="button" class="tab" data-tab="history">History</button>
       <button type="button" class="tab" data-tab="owasp">OWASP 2025</button>
       <button type="button" class="tab" data-tab="mitre">MITRE ATT&amp;CK</button>
+
     </nav>
   </header>
 
@@ -62,7 +63,10 @@
             </label>
             <span>Use Selenium Browser Engine</span>
           </div>
-          <button type="submit" class="btn-primary" id="btnStart">Start Scan</button>
+          <div class="scan-btn-group">
+            <button type="submit" class="btn-primary" id="btnStart">Start Scan</button>
+            <button type="button" class="btn-cancel" id="btnCancel" style="display:none" onclick="cancelActiveScan()">&#x26D4; Stop Scan</button>
+          </div>
         </form>
       </div>
 
@@ -100,6 +104,34 @@
           <div id="owaspBreakdown" class="owasp-bars"></div>
         </div>
 
+        <!-- Threat Intelligence Summary -->
+        <div class="card" id="threatNarrativeCard" style="display:none">
+          <div class="threat-header">
+            <h2>Threat Intelligence Summary</h2>
+            <span id="riskBadge" class="risk-badge"></span>
+          </div>
+          <p id="threatNarrative" class="threat-narrative"></p>
+          <div id="threatMeta" class="threat-meta"></div>
+        </div>
+
+        <!-- AI-Powered Threat Analysis -->
+        <div class="card" id="aiAnalysisCard" style="display:none">
+          <div class="ai-card-header">
+            <h2>&#x1F9E0; AI Threat Analysis</h2>
+            <button class="btn-ai" id="btnAiAnalyze" onclick="aiAnalyze()">&#x2728; Generate AI Analysis</button>
+          </div>
+          <div id="aiAnalysisContent" class="ai-content"></div>
+        </div>
+
+        <!-- AI Executive Summary -->
+        <div class="card" id="aiExecCard" style="display:none">
+          <div class="ai-card-header">
+            <h2>&#x1F4CA; AI Executive Summary</h2>
+            <button class="btn-ai" id="btnAiExec" onclick="aiExecutiveSummary()">&#x2728; Generate Summary</button>
+          </div>
+          <div id="aiExecContent" class="ai-content"></div>
+        </div>
+
         <!-- MITRE ATT&CK Breakdown -->
         <div class="card">
           <h2>MITRE ATT&amp;CK Coverage</h2>
@@ -121,10 +153,13 @@
         <div class="card">
           <h2>Export Results</h2>
           <div class="download-group">
+            <button class="btn-download btn-report" onclick="downloadPDF()">&#x1F4C4; PDF Report</button>
+            <button class="btn-download btn-report" onclick="downloadDOCX()">&#x1F4C3; DOCX Report</button>
             <button class="btn-download" onclick="downloadJSON()">&#x2B07; JSON</button>
             <button class="btn-download" onclick="downloadCSV()">&#x2B07; CSV</button>
             <button class="btn-download" onclick="downloadTXT()">&#x2B07; TXT</button>
           </div>
+          <p class="export-note">PDF &amp; DOCX include PentaVault branding, charts, MITRE breakdown &amp; recommendations</p>
         </div>
 
         <!-- Findings table -->
@@ -216,6 +251,8 @@
         <div id="mitreReference" class="mitre-reference"></div>
       </div>
     </section>
+
+
   </main>
 
   <!-- Finding detail modal -->
@@ -224,6 +261,38 @@
       <button class="modal-close" id="modalClose">&times;</button>
       <h2 id="modalTitle">Finding Detail</h2>
       <div id="modalContent"></div>
+      <div class="modal-ai-section" id="modalAiSection">
+        <button class="btn-ai btn-ai-remediate" id="btnAiRemediate" onclick="aiRemediateModal()">&#x1F9E0; AI Remediation Guide</button>
+        <div id="modalAiContent" class="ai-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MITRE AI Explain Panel -->
+  <div class="modal-overlay" id="mitreAiOverlay" style="display:none">
+    <div class="modal mitre-ai-modal">
+      <button class="modal-close" onclick="closeMitreAiPanel()">&times;</button>
+      <div class="mitre-ai-header">
+        <span class="mitre-ai-icon">&#x1F9E0;</span>
+        <div>
+          <h2 id="mitreAiTitle">AI Technique Explainer</h2>
+          <p id="mitreAiSubtitle" class="card-subtitle" style="margin:4px 0 0"></p>
+        </div>
+      </div>
+      <div id="mitreAiContent" class="ai-content"></div>
+      <div class="mitre-ai-ask">
+        <div class="mitre-ai-ask-row">
+          <input type="text" id="mitreAiQuestion" placeholder="Ask a follow-up question about this technique..." />
+          <button class="btn-ai" id="btnMitreAiAsk" onclick="askMitreAiFollowup()">Ask AI</button>
+        </div>
+        <div class="mitre-ai-suggestions" id="mitreAiSuggestions">
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">How can an attacker exploit this?</span>
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">What logs should I monitor?</span>
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">Show me example attack code</span>
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">How does this relate to my other findings?</span>
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">Explain this to a non-technical manager</span>
+        </div>
+      </div>
     </div>
   </div>
 

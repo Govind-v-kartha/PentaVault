@@ -71,6 +71,7 @@ def test_ssrf(
     forms: list[dict[str, Any]],
     cookie: str | None = None,
     timeout: float = 10.0,
+    quick: bool = False,
 ) -> list[dict[str, Any]]:
     """Run SSRF tests on endpoints whose parameters look URL-like.
 
@@ -82,7 +83,13 @@ def test_ssrf(
     if cookie:
         headers["Cookie"] = cookie
 
-    all_payloads = INTERNAL_URLS + CLOUD_METADATA_URLS
+    # In quick mode: fewer payloads and fewer endpoints
+    if quick:
+        all_payloads = INTERNAL_URLS[:3] + CLOUD_METADATA_URLS[:1]
+        endpoints = endpoints[:15]
+        forms = forms[:5]
+    else:
+        all_payloads = INTERNAL_URLS + CLOUD_METADATA_URLS
 
     with httpx.Client(
         verify=False, timeout=timeout, follow_redirects=False, headers=headers

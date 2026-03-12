@@ -143,21 +143,21 @@ def _run_web_modules(
         if use_browser:
             return test_xss_selenium(
                 endpoints, forms, waf_detected=waf_detected, cookie=cookie,
-                headless=headless, evidence_dir=evidence_dir,
+                headless=headless, quick=quick, evidence_dir=evidence_dir,
             )
-        return test_xss(endpoints, forms, waf_detected=waf_detected, cookie=cookie, timeout=timeout)
+        return test_xss(endpoints, forms, waf_detected=waf_detected, cookie=cookie, timeout=timeout, quick=quick)
 
     def _hdrs():
         return test_headers(base_url, cookie=cookie, timeout=timeout)
 
     def _ssrf():
-        return test_ssrf(endpoints, forms, cookie=cookie, timeout=timeout)
+        return test_ssrf(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick)
 
     def _idor():
-        return test_idor(endpoints, cookie=cookie, timeout=timeout)
+        return test_idor(endpoints, cookie=cookie, timeout=timeout, quick=quick)
 
     def _redirect():
-        return test_open_redirect(endpoints, cookie=cookie, timeout=timeout)
+        return test_open_redirect(endpoints, cookie=cookie, timeout=timeout, quick=quick)
 
     def _timed(name: str, fn):
         """Wrapper that times a module and logs duration."""

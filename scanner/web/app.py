@@ -101,7 +101,7 @@ def _load_history() -> dict[str, dict[str, Any]]:
 
 
 def _save_history() -> None:
-    """Persist completed/failed/cancelled scans to disk."""
+    """Persist completed/failed/cancelled scans to disk (atomic write)."""
     try:
         persistable = {}
         for sid, s in scans.items():
@@ -109,8 +109,11 @@ def _save_history() -> None:
                 # Shallow copy, drop non-serialisable transient keys
                 entry = {k: v for k, v in s.items() if not k.startswith("_")}
                 persistable[sid] = entry
-        with open(_HISTORY_FILE, "w", encoding="utf-8") as f:
+        # Atomic write: write to temp file then rename to avoid corruption
+        tmp_file = _HISTORY_FILE.with_suffix(".tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(persistable, f, default=str)
+        tmp_file.replace(_HISTORY_FILE)
     except Exception as exc:
         log.warning("Failed to save scan history: %s", exc)
 
@@ -165,8 +168,10 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             try:
                 _hx.get(url, timeout=15, verify=False, follow_redirects=True)
             except Exception as exc:
-                scan["status"] = "error"
+                scan["status"] = "failed"
                 scan["error"] = f"Target unreachable: {exc}"
+                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+                _save_history()
                 log.error("[%s] Target unreachable: %s", scan_id[:8], exc)
                 return
 
@@ -181,6 +186,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         # ── Stage 2: Recon ──────────────────────────────────────
         if req.mode in ("full", "network-only"):
+            if scan.get("_cancel"):
+                scan["status"] = "cancelled"
+                scan["current_stage"] = "Cancelled by user"
+                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+                _save_history()
+                return
             scan["current_stage"] = "Reconnaissance"
             scan["progress"] = 10
             t0 = time.monotonic()
@@ -195,6 +206,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         # ── Stage 3: Fingerprinting ─────────────────────────────
         if req.mode in ("full", "web-only", "quick") and is_url:
+            if scan.get("_cancel"):
+                scan["status"] = "cancelled"
+                scan["current_stage"] = "Cancelled by user"
+                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+                _save_history()
+                return
             scan["current_stage"] = "Fingerprinting"
             scan["progress"] = 20
             t0 = time.monotonic()
@@ -211,6 +228,10 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         if req.mode in ("full", "web-only", "quick") and is_url:
             if scan.get("_cancel"):
+                scan["status"] = "cancelled"
+                scan["current_stage"] = "Cancelled by user"
+                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+                _save_history()
                 return
             scan["current_stage"] = "Web Crawling"
             scan["progress"] = 30
@@ -246,28 +267,36 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         all_findings: list[dict[str, Any]] = []
         if req.mode != "network-only" and endpoints:
             if scan.get("_cancel"):
+                scan["status"] = "cancelled"
+                scan["current_stage"] = "Cancelled by user"
+                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+                _save_history()
                 return
             scan["current_stage"] = "Vulnerability Testing"
             scan["progress"] = 50
             t0 = time.monotonic()
-            
-            log.info("[%s] Starting vulnerability testing on %d endpoints with %d threads", scan_id[:8], len(endpoints), req.threads)
+            is_quick = (req.mode == "quick")
+
+            log.info("[%s] Starting vulnerability testing on %d endpoints | threads=%d | timeout=%.1fs | quick=%s",
+                     scan_id[:8], len(endpoints), req.threads, req.timeout, is_quick)
+
+            # Re-read mutable Selenium flag (may have been toggled mid-scan)
+            use_browser_vuln = scan.get("use_browser", req.use_browser)
 
             modules = [
-                ("SQLi", lambda: test_sqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=(req.mode == "quick"))),
-                ("XSS", lambda: test_xss(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, timeout=req.timeout)),
+                ("SQLi", lambda: test_sqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
+                ("XSS", lambda: test_xss(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
                 ("Headers", lambda: test_headers(url, cookie=req.cookie, timeout=req.timeout)),
-                ("SSRF", lambda: test_ssrf(endpoints, forms, cookie=req.cookie, timeout=req.timeout)),
-                ("IDOR", lambda: test_idor(endpoints, cookie=req.cookie, timeout=req.timeout)),
-                ("Open Redirect", lambda: test_open_redirect(endpoints, cookie=req.cookie, timeout=req.timeout)),
+                ("SSRF", lambda: test_ssrf(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
+                ("IDOR", lambda: test_idor(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
+                ("Open Redirect", lambda: test_open_redirect(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
             ]
 
-            use_browser_vuln = scan.get("use_browser", req.use_browser)
             if use_browser_vuln:
                 from scanner.modules.sqli_selenium import test_sqli_selenium
                 from scanner.modules.xss_selenium import test_xss_selenium
-                modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=(req.mode == "quick"), evidence_dir="evidence"))
-                modules[1] = ("XSS (Browser)", lambda: test_xss_selenium(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, headless=True, quick=(req.mode == "quick"), evidence_dir="evidence"))
+                modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence"))
+                modules[1] = ("XSS (Browser)", lambda: test_xss_selenium(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence"))
                 log.info("[%s] Using Selenium browser for SQLi and XSS tests (module timeout: %ds)", scan_id[:8], 120 if req.mode == "quick" else 180)
             else:
                 log.info("[%s] Using standard HTTP modules for all vulnerability tests", scan_id[:8])
@@ -321,9 +350,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 return result_container[0] if result_container else []
 
             # Run non-browser modules concurrently, browser modules sequentially
-            if req.use_browser:
+            if use_browser_vuln:
                 browser_modules = modules[:2]
                 http_modules = modules[2:]
+
+                log.info("[%s] Selenium ON: running %d HTTP modules with %d threads, then %d browser modules sequentially",
+                         scan_id[:8], len(http_modules), req.threads, len(browser_modules))
 
                 with ThreadPoolExecutor(max_workers=req.threads) as pool:
                     futures = {pool.submit(fn): name for name, fn in http_modules}
@@ -359,6 +391,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                         log.error("[%s] %s failed: %s", scan_id[:8], name, exc)
                         completed += 1
             else:
+                log.info("[%s] Selenium OFF: running all %d modules with %d threads",
+                         scan_id[:8], len(modules), req.threads)
                 with ThreadPoolExecutor(max_workers=req.threads) as pool:
                     futures = {pool.submit(fn): name for name, fn in modules}
                     for future in as_completed(futures):
@@ -378,6 +412,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             scan["stages"].append({"name": "Vulnerability Testing", "time": round(time.monotonic() - t0, 1)})
 
         # ── Stage 6: CVSS Scoring ───────────────────────────────
+        if scan.get("_cancel"):
+            scan["status"] = "cancelled"
+            scan["current_stage"] = "Cancelled by user"
+            scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+            _save_history()
+            return
         scan["current_stage"] = "CVSS Scoring"
         scan["progress"] = 85
         all_findings = enrich_findings(all_findings)
@@ -471,7 +511,11 @@ async def get_scan_status(scan_id: str):
 
     scan = scans[scan_id]
     started = datetime.fromisoformat(scan["started_at"])
-    elapsed = (datetime.now() - started).total_seconds()
+    if scan["status"] in ("completed", "failed", "cancelled") and scan.get("completed_at"):
+        ended = datetime.fromisoformat(scan["completed_at"])
+        elapsed = (ended - started).total_seconds()
+    else:
+        elapsed = (datetime.now() - started).total_seconds()
     scan["elapsed"] = round(elapsed, 1)
 
     return scan
@@ -533,11 +577,11 @@ async def cancel_scan(scan_id: str):
     scan = scans[scan_id]
     if scan["status"] != "running":
         return {"cancelled": False, "reason": "Scan is not running"}
+    # Signal the background thread first to avoid race condition
+    scan["_cancel"] = True
     scan["status"] = "cancelled"
     scan["current_stage"] = "Cancelled by user"
     scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-    # Mark as cancelled so _run_scan can check and exit early
-    scan["_cancel"] = True
     log.info("[%s] Scan cancelled by user", scan_id[:8])
     _save_history()
     return {"cancelled": True}

@@ -29,6 +29,14 @@ logs/
 reports/
 evidence/
 findings*.json
+*.pdf
+*.docx
+
+# Node
+node_modules/
+
+# Scan data (persisted history)
+scanner/data/*.json
 
 # OS
 Thumbs.db

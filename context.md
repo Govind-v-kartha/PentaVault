@@ -42,7 +42,7 @@
 
 **PentaVault** is a professional-grade **Automated Vulnerability Assessment and Penetration Testing (VAPT)** security suite. It automates the full security scanning lifecycle from target reconnaissance through vulnerability testing to scored report generation.
 
-- **Version**: 1.1.0
+- **Version**: 1.2.0
 - **Language**: Python 3.13
 - **Platform**: Windows (primary), cross-compatible
 - **Interfaces**: CLI + Web Dashboard (FastAPI)
@@ -125,7 +125,9 @@ c:\Project 1\
 │   │   ├── __init__.py
 │   │   ├── logger.py                # Centralized file + console logging
 │   │   ├── report_exporter.py       # JSON report generation (3 variants)
-│   │   └── mitre_mapping.py         # MITRE ATT&CK v16.1 mapping engine
+│   │   ├── mitre_mapping.py         # MITRE ATT&CK v16.1 mapping engine
+│   │   ├── ai_engine.py             # Gemini AI threat intelligence (4-key failover)
+│   │   └── pdf_report.py            # Professional PDF/DOCX report generation
 │   │
 │   ├── web/                         # Web Dashboard (FastAPI)
 │   │   ├── app.py                   # FastAPI application + REST API
@@ -135,6 +137,7 @@ c:\Project 1\
 │   │       └── app.js               # Dashboard JavaScript (~680 lines)
 │   │
 │   ├── reports/                     # Auto-created: JSON report output
+│   ├── data/                        # Auto-created: persistent scan history
 │   ├── evidence/                    # Auto-created: screenshot PNGs
 │   └── logs/                        # Auto-created: timestamped log files
 ```
@@ -341,7 +344,8 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 ### Backend: `scanner/web/app.py`
 - **Framework**: FastAPI with CORS middleware (allow all origins)
 - **Static Files**: Mounted at `/static/` from `scanner/web/static/`
-- **Scan Store**: In-memory dictionary `scans: dict[str, dict[str, Any]]`
+- **Scan Store**: In-memory dictionary `scans: dict[str, dict[str, Any]]` with file-backed persistence to `scanner/data/scan_history.json`
+- **Persistence**: `_load_history()` on startup, `_save_history()` after each state change — atomic writes via temp file + `os.replace()` to prevent corruption
 - **Background Execution**: `_run_scan()` runs in a daemon thread per scan
 - **Models**:
   - `ScanRequest` (Pydantic): target, mode, cookie, threads (1–10), timeout (1–60), use_browser
@@ -825,12 +829,12 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 
 ## 25. Known Considerations
 
-1. **Scan Store**: In-memory only — scans are lost on server restart. No database persistence.
+1. **Scan Store**: In-memory dictionary backed by JSON file persistence (`scanner/data/scan_history.json`). Atomic writes prevent corruption.
 2. **Single Instance**: Web dashboard runs on one port (8000) — no multi-instance/load balancing.
 3. **Chrome Processes**: Browser mode may leave orphaned Chrome processes on crash — `_run_module_with_timeout` handles cleanup via taskkill.
 4. **Windows-Specific**: `taskkill` command is Windows-only. Cross-platform would need `os.kill()` or `psutil`.
 5. **Rate Limiting**: No built-in rate limiting to target — high thread counts may trigger target WAF/IDS.
-6. **Scan Cancellation**: Uses `_cancel` flag checked at stage boundaries — does not interrupt mid-module execution.
+6. **Scan Cancellation**: Uses `_cancel` flag checked at all stage boundaries with proper status/history cleanup — does not interrupt mid-module execution.
 7. **CORS**: API allows all origins (`allow_origins=["*"]`) — suitable for local development, not production deployment.
 8. **Authentication**: No dashboard authentication — anyone with network access to port 8000 can run scans.
 9. **Evidence Storage**: Screenshots stored on disk with no auto-cleanup.
@@ -843,7 +847,7 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Author**: Govind V Kartha
 - **Copyright**: © 2026 Govind V Kartha. All rights reserved.
 - **License**: Proprietary
-- **Project**: PentaVault — Automated VAPT Security Suite v1.1.0
+- **Project**: PentaVault — Automated VAPT Security Suite v1.2.0
 - **Tagline**: PentaVault — Automated VAPT Security Suite
 
 ---

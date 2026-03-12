@@ -118,7 +118,6 @@ def crawl(
                 continue
 
             visited.add(normalized)
-            result.endpoints.append(normalized)
 
             # Collect query-string parameter names
             for param in parse_qs(urlparse(normalized).query):
@@ -129,6 +128,8 @@ def crawl(
             except httpx.HTTPError as exc:
                 log.debug("Failed to fetch %s: %s", normalized, exc)
                 continue
+
+            result.endpoints.append(normalized)
 
             # Detect pages that required authentication (redirected to login, 401/403)
             if resp.status_code in (401, 403):

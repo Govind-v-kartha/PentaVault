@@ -2,12 +2,13 @@
   <img src="https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white" />
   <img src="https://img.shields.io/badge/FastAPI-0.111+-009688?logo=fastapi&logoColor=white" />
   <img src="https://img.shields.io/badge/Selenium-4.20+-43B02A?logo=selenium&logoColor=white" />
+  <img src="https://img.shields.io/badge/Version-1.2.0-brightgreen" />
   <img src="https://img.shields.io/badge/License-Proprietary-red" />
 </p>
 
 # 🛡️ PentaVault — Automated VAPT Security Suite
 
-**PentaVault** is a professional-grade **Vulnerability Assessment and Penetration Testing (VAPT)** tool that automates the full security scanning pipeline — from reconnaissance to report generation. It features a modern dark-themed web dashboard, MITRE ATT&CK v16.1 integration, OWASP 2025 Top 10 mapping, and optional Selenium-based browser engine for deep JS-rendered vulnerability testing.
+**PentaVault** is a professional-grade **Vulnerability Assessment and Penetration Testing (VAPT)** tool that automates the full security scanning pipeline — from reconnaissance to report generation. It features a modern dark-themed web dashboard, **built-in Gemini AI threat intelligence**, MITRE ATT&CK v16.1 integration, OWASP 2025 Top 10 mapping, professional PDF/DOCX report export, and optional Selenium-based browser engine for deep JS-rendered vulnerability testing.
 
 > **© 2026 Govind V Kartha. All rights reserved.**
 
@@ -25,7 +26,9 @@
 | **OWASP 2025 Top 10** | Full A01–A10 category mapping for every finding |
 | **CVSS v3.1 Scoring** | Automatic severity scoring with vector strings |
 | **Web Dashboard** | FastAPI-powered dark-themed single-page app with live progress, history, filters, modal details |
-| **Export Formats** | JSON, CSV, TXT — standard, executive, and technical report variants |
+| **Scan History** | Persistent scan history across server restarts — stored to `scanner/data/scan_history.json` with atomic writes |
+| **AI Threat Intelligence** | Built-in Gemini AI — threat analysis, executive summaries, per-finding remediation guidance |
+| **Export Formats** | PDF (branded with charts & watermark), DOCX, JSON, CSV, TXT — standard, executive, and technical report variants |
 | **Evidence Capture** | Screenshot-based proof for browser-detected vulnerabilities |
 
 ---
@@ -61,7 +64,10 @@ c:\Project 1\
 │   ├── utils/                   # Support modules
 │   │   ├── logger.py            # File + console logging
 │   │   ├── report_exporter.py   # JSON/executive/technical report generation
-│   │   └── mitre_mapping.py     # MITRE ATT&CK v16.1 mapping engine
+│   │   ├── mitre_mapping.py     # MITRE ATT&CK v16.1 mapping engine
+│   │   ├── ai_engine.py         # Gemini AI threat intelligence engine
+│   │   ├── pdf_report.py        # Professional PDF report generator + DOCX bridge
+│   │   └── generate_report.js   # Node.js DOCX generator (docx npm package)
 │   │
 │   ├── web/                     # Web Dashboard
 │   │   ├── app.py               # FastAPI REST API backend
@@ -71,6 +77,7 @@ c:\Project 1\
 │   │       └── app.js           # Dashboard JavaScript
 │   │
 │   ├── reports/                 # Generated JSON reports (auto-created)
+│   ├── data/                    # Persistent scan history (auto-created)
 │   ├── evidence/                # Screenshot evidence (auto-created)
 │   └── logs/                    # Scan log files (auto-created)
 │
@@ -84,6 +91,7 @@ c:\Project 1\
 ### Prerequisites
 
 - **Python 3.13+**
+- **Node.js 18+** — required for DOCX report generation
 - **Nmap** — installed and in PATH ([https://nmap.org/download.html](https://nmap.org/download.html))
 - **Google Chrome** — required only for Selenium browser mode
 
@@ -99,6 +107,7 @@ python -m venv .venv
 
 # Install dependencies
 pip install -r scanner/requirements.txt
+npm install
 ```
 
 ---
@@ -116,6 +125,8 @@ Open **http://127.0.0.1:8000** in a browser. The dashboard provides:
 - Live progress bar with real-time timer
 - Total elapsed time after scan completion
 - Severity breakdown (Critical / High / Medium / Low / Info)
+- AI-powered threat analysis, executive summaries, and per-finding remediation
+- PDF and DOCX report download with charts, MITRE breakdown, and PentaVault watermark
 - OWASP 2025 category bars
 - MITRE ATT&CK matrix heatmap, technique breakdown, attack path analysis
 - Findings table with filtering, click-to-expand detail modal
@@ -227,6 +238,12 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 | `GET` | `/api/mitre` | MITRE technique reference |
 | `GET` | `/api/mitre/tactics` | All 14 ATT&CK tactics |
 | `GET` | `/api/evidence/{filename}` | Serve screenshot evidence |
+| `POST` | `/api/ai/analyze` | AI threat analysis for a scan |
+| `POST` | `/api/ai/remediate` | AI remediation for a specific finding |
+| `POST` | `/api/ai/executive-summary` | AI-powered executive summary |
+| `POST` | `/api/ai/mitre-explain` | AI technique explainer with personalized Q&A |
+| `GET` | `/api/scan/{id}/report/pdf` | Download professional PDF report |
+| `GET` | `/api/scan/{id}/report/docx` | Download DOCX report |
 
 ---
 
@@ -255,10 +272,38 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 - **python-whois** — WHOIS lookups
 - **scapy** — Network analysis
 - **cvss** — CVSS v3.1 scoring
+- **Google Gemini AI** — Built-in threat intelligence and analysis
+- **fpdf2** — Professional PDF report generation
+- **Node.js docx** — Professional DOCX report generation (pixel-perfect formatting)
+- **matplotlib** — Severity and OWASP charts
 
 ---
 
-## 📝 License
+## � Changelog
+
+### v1.2.0 (Latest)
+
+**New Features:**
+- **Persistent Scan History** — Scan results now survive server restarts, stored in `scanner/data/scan_history.json` with atomic writes (temp file + rename) to prevent corruption on crash
+- **Comprehensive Scan Logging** — All scan stages emit detailed log messages for debugging
+
+**Bug Fixes:**
+- **Scan Mode Differentiation** — `quick` parameter now correctly passed to all 6 vulnerability modules (SQLi, XSS, SSRF, IDOR, Open Redirect) and CLI; quick scans are genuinely faster
+- **Selenium Toggle** — Fixed browser toggle so it correctly switches between httpx and Selenium crawling/testing mid-scan
+- **Cancel Safety** — All cancel checkpoints now properly set `status=cancelled`, `completed_at`, and persist to history before returning (previously some left scans stuck as "running")
+- **Unreachable Target Handling** — Connectivity pre-check now sets `status=failed` (not `error`) so the frontend correctly stops polling and shows the failure
+- **Cancel Race Condition** — Cancel endpoint now sets the `_cancel` flag before updating status to prevent the background thread from overwriting the cancellation
+- **Elapsed Time Freeze** — Scan timer now correctly freezes at the final value when a scan completes, instead of continuing to grow
+- **Findings Display** — Frontend now correctly maps backend field names (`title`, `affected_url`, `remediation`) in the findings table, detail modal, CSV export, and TXT export
+- **AI XSS Protection** — AI-generated HTML is sanitized via `sanitizeAiHtml()` to prevent script injection from model responses
+
+### v1.1.0
+
+- Initial public release with 7-stage pipeline, MITRE ATT&CK v16.1, OWASP 2025, Gemini AI, PDF/DOCX export
+
+---
+
+## �📝 License
 
 **Proprietary** — © 2026 Govind V Kartha. All rights reserved.
 

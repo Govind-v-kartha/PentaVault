@@ -150,6 +150,7 @@ def test_xss(
     waf_detected: bool = False,
     cookie: str | None = None,
     timeout: float = 10.0,
+    quick: bool = False,
 ) -> list[dict[str, Any]]:
     """Run XSS tests against all endpoints and forms.
 
@@ -161,11 +162,15 @@ def test_xss(
     if cookie:
         headers["Cookie"] = cookie
 
+    # In quick mode, limit scope
+    test_endpoints = endpoints[:15] if quick else endpoints
+    test_forms = forms[:5] if quick else forms
+
     with httpx.Client(
         verify=False, timeout=timeout, follow_redirects=True, headers=headers
     ) as client:
         # ── Reflected XSS on GET params ─────────────────────────────
-        for url in endpoints:
+        for url in test_endpoints:
             params = parse_qs(urlparse(url).query)
             path = urlparse(url).path
             for param in params:
@@ -179,7 +184,8 @@ def test_xss(
 
         # ── DOM-based XSS analysis ──────────────────────────────────
         visited: set[str] = set()
-        for url in endpoints:
+        dom_limit = 10 if quick else len(test_endpoints)
+        for url in test_endpoints[:dom_limit]:
             base = urlparse(url)._replace(query="", fragment="").geturl()
             if base in visited:
                 continue
@@ -192,7 +198,7 @@ def test_xss(
                 continue
 
         # ── Stored XSS via forms ────────────────────────────────────
-        for form in forms:
+        for form in test_forms:
             if form["method"] != "POST":
                 continue
             result = _test_stored(client, form, form["action"])

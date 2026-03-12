@@ -1218,8 +1218,8 @@ def build_mitre_breakdown(findings: list[dict[str, Any]]) -> list[dict[str, Any]
             "confidence": "low", "severity_weight": 0,
             "detection": "", "mitigations": [],
             "finding_ids": [], "finding_titles": [],
-        })
-    )
+            "finding_evidence": [],
+        }))
 
     conf_rank = {"high": 3, "medium": 2, "low": 1}
 
@@ -1247,6 +1247,12 @@ def build_mitre_breakdown(findings: list[dict[str, Any]]) -> list[dict[str, Any]
                     entry["finding_ids"].append(fid)
                 if ftitle and ftitle not in entry["finding_titles"]:
                     entry["finding_titles"].append(ftitle)
+                if len(entry["finding_evidence"]) < 5:
+                    entry["finding_evidence"].append({
+                        "url": f.get("url", f.get("path", "")),
+                        "detail": (f.get("detail", "") or "")[:120],
+                        "severity": f.get("severity", "Low"),
+                    })
 
     # Sort by ATT&CK tactic ordinal
     tactic_order = {tac.name: tac.ordinal for tac in TACTICS.values()}
@@ -1268,6 +1274,7 @@ def build_mitre_breakdown(findings: list[dict[str, Any]]) -> list[dict[str, Any]
                 "finding_count": len(info["finding_ids"]),
                 "finding_ids": info["finding_ids"],
                 "finding_titles": info["finding_titles"],
+                "finding_evidence": info["finding_evidence"],
             })
         result.append({
             "tactic": tactic,
@@ -1377,3 +1384,147 @@ def get_all_tactics() -> list[dict[str, Any]]:
         }
         for tac in sorted(TACTICS.values(), key=lambda t: t.ordinal)
     ]
+
+
+def build_threat_narrative(
+    target: str,
+    findings: list[dict[str, Any]],
+    breakdown: list[dict[str, Any]],
+    coverage: dict[str, Any],
+) -> dict[str, Any]:
+    """Generate a target-personalised threat intelligence narrative.
+
+    Produces a rich-text summary referencing the actual hostname,
+    detected vulnerability types, matched ATT&CK techniques,
+    kill-chain coverage, and affected endpoints.
+    """
+    from urllib.parse import urlparse
+
+    hostname = urlparse(target).hostname or target
+
+    total = len(findings)
+    sev_counts: dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0, "Info": 0}
+    vuln_types: set[str] = set()
+    affected_urls: set[str] = set()
+
+    for f in findings:
+        sev = f.get("severity", "Low")
+        if sev in sev_counts:
+            sev_counts[sev] += 1
+        else:
+            sev_counts["Info"] += 1
+        vuln_types.add(f.get("type", f.get("module", "unknown")))
+        url = f.get("url", f.get("path", ""))
+        if url:
+            affected_urls.add(url)
+
+    # Determine overall risk level
+    if sev_counts["Critical"] > 0:
+        risk_level, risk_color = "CRITICAL", "critical"
+    elif sev_counts["High"] > 0:
+        risk_level, risk_color = "HIGH", "high"
+    elif sev_counts["Medium"] > 0:
+        risk_level, risk_color = "ELEVATED", "medium"
+    else:
+        risk_level, risk_color = "LOW", "low"
+
+    tactics_hit = coverage.get("tactics_with_hits", 0)
+    total_tactics = coverage.get("total_tactics", 14)
+    tech_hits = coverage.get("total_technique_hits", 0)
+
+    # ── Build narrative sentences from actual scan data ──────────
+    sentences: list[str] = []
+
+    sentences.append(
+        f"Analysis of <strong>{hostname}</strong> identified "
+        f"<strong>{total} security finding{'s' if total != 1 else ''}</strong> "
+        f"mapping to <strong>{tech_hits} MITRE ATT&amp;CK technique{'s' if tech_hits != 1 else ''}</strong> "
+        f"across <strong>{tactics_hit}/{total_tactics}</strong> Enterprise tactics."
+    )
+
+    # Per-vulnerability-type contextual descriptions
+    _type_narratives: dict[str, str] = {
+        "xss": (
+            f"Cross-Site Scripting (XSS) vulnerabilities were detected on {hostname}, "
+            "enabling adversaries to execute arbitrary JavaScript in victim browsers "
+            "(T1059.007), steal session cookies (T1539), and perform drive-by "
+            "compromises (T1189)."
+        ),
+        "sqli": (
+            f"SQL Injection flaws were found on {hostname}, allowing adversaries to "
+            "exploit the public-facing application (T1190) for data exfiltration "
+            "(T1048) and data manipulation (T1565.001)."
+        ),
+        "header": (
+            f"Missing security headers on {hostname} impair built-in browser defenses "
+            "(T1562), enabling MIME-sniffing attacks (T1036), clickjacking (T1185), "
+            "and man-in-the-middle interception (T1557)."
+        ),
+        "ssrf": (
+            f"Server-Side Request Forgery (SSRF) on {hostname} could allow adversaries "
+            "to access internal services (T1210), cloud metadata (T1580), and "
+            "credential stores (T1555)."
+        ),
+        "idor": (
+            f"Insecure Direct Object References on {hostname} enable privilege "
+            "escalation (T1068) and unauthorised data access through broken access "
+            "controls (T1548)."
+        ),
+        "redirect": (
+            f"Open redirect vulnerabilities on {hostname} can be weaponised for "
+            "phishing campaigns by lending domain trust to malicious infrastructure "
+            "(T1583.006)."
+        ),
+    }
+
+    for vtype in vuln_types:
+        vl = vtype.lower()
+        for key, desc in _type_narratives.items():
+            if key in vl:
+                sentences.append(desc)
+                break
+
+    # Kill-chain span narrative
+    kc_phases: set[str] = set()
+    for f in findings:
+        kc_phases.update(f.get("mitre_kill_chain", []))
+    if len(kc_phases) >= 3:
+        sentences.append(
+            f"The detected vulnerabilities on {hostname} span "
+            f"<strong>{len(kc_phases)} kill-chain phases</strong>, indicating that "
+            "an adversary could chain these findings into a multi-stage attack \u2014 "
+            "from initial reconnaissance through exploitation to actions on objectives."
+        )
+
+    # Affected endpoint count
+    if len(affected_urls) > 3:
+        sentences.append(
+            f"<strong>{len(affected_urls)} distinct endpoints</strong> on {hostname} "
+            "were identified as vulnerable, expanding the overall attack surface."
+        )
+
+    # High-value tactic callout
+    high_value = ["Credential Access", "Lateral Movement", "Impact"]
+    detected_hv = [
+        tg["tactic"] for tg in breakdown if tg["tactic"] in high_value
+    ]
+    if detected_hv:
+        sentences.append(
+            f"Notably, findings map to high-impact tactics including "
+            f"<strong>{', '.join(detected_hv)}</strong>, which represent advanced "
+            "adversary objectives in the kill chain."
+        )
+
+    return {
+        "target": target,
+        "hostname": hostname,
+        "risk_level": risk_level,
+        "risk_color": risk_color,
+        "narrative": " ".join(sentences),
+        "finding_count": total,
+        "severity_breakdown": sev_counts,
+        "vuln_types": sorted(vuln_types),
+        "affected_endpoint_count": len(affected_urls),
+        "tactics_covered": tactics_hit,
+        "techniques_matched": tech_hits,
+    }

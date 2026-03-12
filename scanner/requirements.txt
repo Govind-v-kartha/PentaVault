@@ -15,3 +15,9 @@ webdriver-manager>=4.0.0
 # Web GUI
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
+
+# AI + Reports
+google-generativeai>=0.8.0
+fpdf2>=2.8.0
+python-docx>=1.1.0
+matplotlib>=3.9.0
