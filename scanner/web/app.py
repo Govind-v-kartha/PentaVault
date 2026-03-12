@@ -173,7 +173,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         # ── Stage 1: Target Input ───────────────────────────────
         scan["current_stage"] = "Target Input"
         scan["progress"] = 5
-        log.info("[%s] Target: %s | Mode: %s", scan_id[:8], url, req.mode)
+        log.info("[%s] Target: %s | Mode: %s | Threads: %d | Timeout: %.1fs | Browser: %s | Cookie: %s", 
+                 scan_id[:8], url, req.mode, req.threads, req.timeout, req.use_browser, bool(req.cookie))
 
         recon_data: dict[str, Any] = {}
         fingerprint_data: dict[str, Any] = {}
@@ -249,6 +250,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             scan["current_stage"] = "Vulnerability Testing"
             scan["progress"] = 50
             t0 = time.monotonic()
+            
+            log.info("[%s] Starting vulnerability testing on %d endpoints with %d threads", scan_id[:8], len(endpoints), req.threads)
 
             modules = [
                 ("SQLi", lambda: test_sqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=(req.mode == "quick"))),
@@ -265,6 +268,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 from scanner.modules.xss_selenium import test_xss_selenium
                 modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=(req.mode == "quick"), evidence_dir="evidence"))
                 modules[1] = ("XSS (Browser)", lambda: test_xss_selenium(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, headless=True, quick=(req.mode == "quick"), evidence_dir="evidence"))
+                log.info("[%s] Using Selenium browser for SQLi and XSS tests (module timeout: %ds)", scan_id[:8], 120 if req.mode == "quick" else 180)
+            else:
+                log.info("[%s] Using standard HTTP modules for all vulnerability tests", scan_id[:8])
 
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -330,6 +336,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                             scan["progress"] = 50 + int(30 * completed / total_modules)
                             scan["module_results"][name] = len(results)
                             scan["findings_count"] = len(all_findings)
+                            log.info("[%s] %s completed: %d findings (total: %d)", scan_id[:8], name, len(results), len(all_findings))
                         except Exception as exc:
                             log.error("[%s] %s failed: %s", scan_id[:8], name, exc)
                             completed += 1
@@ -347,6 +354,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                         scan["progress"] = 50 + int(30 * completed / total_modules)
                         scan["module_results"][name] = len(results)
                         scan["findings_count"] = len(all_findings)
+                        log.info("[%s] %s completed: %d findings (total: %d)", scan_id[:8], name, len(results), len(all_findings))
                     except Exception as exc:
                         log.error("[%s] %s failed: %s", scan_id[:8], name, exc)
                         completed += 1
@@ -362,6 +370,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                             scan["progress"] = 50 + int(30 * completed / total_modules)
                             scan["module_results"][name] = len(results)
                             scan["findings_count"] = len(all_findings)
+                            log.info("[%s] %s completed: %d findings (total: %d)", scan_id[:8], name, len(results), len(all_findings))
                         except Exception as exc:
                             log.error("[%s] %s failed: %s", scan_id[:8], name, exc)
                             completed += 1
