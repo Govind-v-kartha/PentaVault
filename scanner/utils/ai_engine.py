@@ -11,21 +11,202 @@ Multiple API keys are supported with automatic failover on rate limits.
 from __future__ import annotations
 
 import json
-import re
+import os
+import threading
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+_DEFAULT_GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
+
+_RATE_LIMIT_STATUSES = {429}
+_TRANSIENT_STATUSES = {408, 409, 500, 502, 503, 504}
+_MODEL_RETRY_STATUSES = {400, 404}
+_INVALID_KEY_STATUSES = {401}
+_POTENTIALLY_QUOTA_STATUSES = {403}
+_BASE_KEY_COOLDOWN_SECONDS = 15.0
+_MAX_KEY_COOLDOWN_SECONDS = 300.0
+
+_PROMPT_BASE_RULES = [
+    "Use HTML fragments only (<strong>, <em>, <ul><li>, <ol><li>, <code>, <pre>, <br>, <p>, <div>, <span>).",
+    "Do not use markdown syntax.",
+    "Anchor every claim to the provided scan context and findings.",
+    "Avoid generic advice and avoid role-play phrases.",
+]
+
+
+def _compose_prompt(role: str, context: str, body: str, extra_rules: list[str] | None = None) -> str:
+    rules = _PROMPT_BASE_RULES + (extra_rules or [])
+    rules_text = "\n".join(f"- {rule}" for rule in rules)
+    return (
+        f"Role: {role}\n\n"
+        f"SCAN CONTEXT:\n{context}\n\n"
+        f"OUTPUT RULES:\n{rules_text}\n\n"
+        f"TASK:\n{body.strip()}"
+    )
+
+
+def load_gemini_api_keys() -> list[str]:
+    """Load Gemini API keys from environment variables."""
+    raw = os.environ.get("PENTAVAULT_GEMINI_API_KEYS", "")
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    if keys:
+        return keys
+
+    single_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    return [single_key] if single_key else []
+
+
+def load_gemini_models() -> list[str]:
+    """Load Gemini model list from environment with sane defaults."""
+    raw = os.environ.get("PENTAVAULT_GEMINI_MODELS", "")
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    return models if models else _DEFAULT_GEMINI_MODELS
+
+
+def _format_key_suffix(key: str) -> str:
+    return f"...{key[-6:]}" if len(key) >= 6 else "(short-key)"
+
+
+@dataclass
+class _KeyState:
+    key: str
+    key_suffix: str
+    cooldown_until: float = 0.0
+    failures: int = 0
+    disabled: bool = False
+
+    def is_available(self, now: float) -> bool:
+        return (not self.disabled) and now >= self.cooldown_until
+
+
+class _GeminiKeyPool:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._states: list[_KeyState] = []
+        self._next_index = 0
+
+    def _sync_keys_locked(self, keys: list[str]) -> None:
+        existing = {state.key: state for state in self._states}
+        synced: list[_KeyState] = []
+        for key in keys:
+            state = existing.get(key)
+            if state is None:
+                state = _KeyState(key=key, key_suffix=_format_key_suffix(key))
+            synced.append(state)
+        self._states = synced
+        if not self._states:
+            self._next_index = 0
+        else:
+            self._next_index %= len(self._states)
+
+    def configure_keys(self, keys: list[str]) -> None:
+        with self._lock:
+            self._sync_keys_locked(keys)
+
+    def next_available_key(self, exclude_keys: set[str] | None = None) -> _KeyState | None:
+        with self._lock:
+            if not self._states:
+                return None
+
+            excluded = exclude_keys or set()
+            now = time.time()
+            total = len(self._states)
+            earliest: _KeyState | None = None
+            for offset in range(total):
+                idx = (self._next_index + offset) % total
+                state = self._states[idx]
+                if state.disabled or state.key in excluded:
+                    continue
+                if earliest is None or state.cooldown_until < earliest.cooldown_until:
+                    earliest = state
+                if state.is_available(now):
+                    self._next_index = (idx + 1) % total
+                    return state
+            if earliest and not earliest.disabled:
+                self._next_index = (self._states.index(earliest) + 1) % total
+                return earliest
+            return None
+
+    def mark_success(self, key: str) -> None:
+        with self._lock:
+            for state in self._states:
+                if state.key == key:
+                    state.failures = 0
+                    state.cooldown_until = 0.0
+                    return
+
+    def mark_invalid_key(self, key: str) -> None:
+        with self._lock:
+            for state in self._states:
+                if state.key == key:
+                    state.disabled = True
+                    state.cooldown_until = float("inf")
+                    return
+
+    def mark_quota_or_rate_limited(self, key: str) -> None:
+        self._mark_with_backoff(key)
+
+    def mark_transient_failure(self, key: str) -> None:
+        self._mark_with_backoff(key)
+
+    def _mark_with_backoff(self, key: str) -> None:
+        with self._lock:
+            now = time.time()
+            for state in self._states:
+                if state.key == key:
+                    state.failures += 1
+                    cooldown = min(
+                        _BASE_KEY_COOLDOWN_SECONDS * (2 ** max(state.failures - 1, 0)),
+                        _MAX_KEY_COOLDOWN_SECONDS,
+                    )
+                    state.cooldown_until = max(state.cooldown_until, now + cooldown)
+                    return
+
+
+_KEY_POOL = _GeminiKeyPool()
+
+
+def _classify_403(exc: httpx.HTTPStatusError) -> str:
+    body = ""
+    try:
+        body = exc.response.text or ""
+    except Exception:
+        body = ""
+    lower = body.lower()
+    if "quota" in lower or "rate" in lower or "exceeded" in lower or "resource exhausted" in lower:
+        return "quota"
+    return "invalid"
+
+
+def _retry_model_only(status_code: int) -> bool:
+    return status_code in _MODEL_RETRY_STATUSES
 
 
 def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> str:
-    """Call Gemini API with automatic key + model rotation on rate limits."""
-    keys = api_key if isinstance(api_key, list) else [api_key]
-    last_error = None
-    for key in keys:
-        for model in _GEMINI_MODELS:
+    """Call Gemini API with key-pool rotation and model failover."""
+    keys = [k for k in (api_key if isinstance(api_key, list) else [api_key]) if k]
+    if not keys:
+        raise RuntimeError("No Gemini API key configured")
+
+    models = load_gemini_models()
+    attempts: list[str] = []
+    _KEY_POOL.configure_keys(keys)
+
+    key_attempted: set[str] = set()
+    while len(key_attempted) < len(keys):
+        state = _KEY_POOL.next_available_key(exclude_keys=key_attempted)
+        if state is None:
+            break
+
+        key = state.key
+        key_suffix = state.key_suffix
+        key_attempted.add(key)
+
+        for model in models:
             url = f"{_GEMINI_BASE}/{model}:generateContent"
             try:
                 resp = httpx.post(
@@ -40,22 +221,43 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
                     },
                     timeout=60,
                 )
-                if resp.status_code == 429:
-                    last_error = f"Rate limited (key ...{key[-6:]}, model {model})"
-                    continue
                 resp.raise_for_status()
                 data = resp.json()
                 candidates = data.get("candidates", [])
+                _KEY_POOL.mark_success(key)
                 if not candidates:
                     return "No response from AI model."
                 parts = candidates[0].get("content", {}).get("parts", [])
                 return parts[0].get("text", "") if parts else ""
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 429:
-                    last_error = f"Rate limited (key ...{key[-6:]}, model {model})"
+                status = exc.response.status_code
+                attempts.append(f"HTTP {status} (key {key_suffix}, model {model})")
+
+                if status in _RATE_LIMIT_STATUSES:
+                    _KEY_POOL.mark_quota_or_rate_limited(key)
+                    break
+                if status in _TRANSIENT_STATUSES:
+                    _KEY_POOL.mark_transient_failure(key)
+                    break
+                if status in _INVALID_KEY_STATUSES:
+                    _KEY_POOL.mark_invalid_key(key)
+                    break
+                if status in _POTENTIALLY_QUOTA_STATUSES:
+                    if _classify_403(exc) == "quota":
+                        _KEY_POOL.mark_quota_or_rate_limited(key)
+                        break
+                    _KEY_POOL.mark_invalid_key(key)
+                    break
+                if _retry_model_only(status):
                     continue
                 raise
-    raise RuntimeError(f"All API keys/models exhausted: {last_error}")
+            except httpx.RequestError as exc:
+                attempts.append(f"Request error {exc.__class__.__name__} (key {key_suffix}, model {model})")
+                _KEY_POOL.mark_transient_failure(key)
+                break
+
+    attempts_text = "; ".join(attempts[-8:]) if attempts else "unknown error"
+    raise RuntimeError(f"All API keys/models exhausted: {attempts_text}")
 
 
 def _summarise_findings(findings: list[dict[str, Any]], limit: int = 30) -> str:
@@ -134,32 +336,32 @@ def ai_threat_analysis(
         for tg in mitre_breakdown
     )
 
-    prompt = f"""You are a senior penetration tester and threat intelligence analyst.
-
-SCAN CONTEXT:
-{context}
-
+    body = f"""
 FINDINGS SUMMARY ({len(findings)} total):
 {findings_summary}
 
 MITRE ATT&CK COVERAGE: {tech_hits} techniques across {tactics_hit}/{total_tactics} tactics
 Tactics detected: {tactic_list}
 
-Provide a PROFESSIONAL threat intelligence analysis in this exact structure.
-Use HTML formatting (<strong>, <em>, <ul><li>, <br>).
-Make it understandable for BOTH beginners and security professionals.
+Provide a professional threat intelligence analysis with this exact structure:
+1. Risk Overview (2-3 sentences) — overall risk posture of this specific target.
+2. Attack Chain Analysis (paragraph) — how an attacker could chain these specific vulnerabilities together.
+3. Critical Findings (bullet list) — top 3-5 most dangerous findings and why they matter.
+4. MITRE ATT&CK Implications (paragraph) — what tactic/technique coverage implies about adversary behavior.
+5. Priority Remediation (numbered list) — what to fix first and why.
+6. Business Impact (2-3 sentences) — non-technical impact to the organisation.
 
-Structure:
-1. **Risk Overview** (2-3 sentences) — Overall risk posture of this specific target.
-2. **Attack Chain Analysis** (paragraph) — How an attacker could CHAIN these specific vulnerabilities together step by step. Be very specific about the target.
-3. **Critical Findings** (bullet list) — Top 3-5 most dangerous findings and WHY they matter.
-4. **MITRE ATT&CK Implications** (paragraph) — What the tactic/technique coverage means in real-world adversary behavior.
-5. **Priority Remediation** (numbered list) — What to fix FIRST and WHY, in order of urgency. Include specific actions.
-6. **Business Impact** (2-3 sentences) — What could happen to the organisation if these are exploited, in non-technical language.
-
-Be concise but thorough. Reference specific vulnerability types, parameters, and MITRE technique IDs found in the scan.
-Do NOT use markdown headers (##). Use <strong> tags for section titles.
-Do NOT include generic advice — everything must be specific to THIS scan's findings."""
+Use <strong> tags for section titles.
+"""
+    prompt = _compose_prompt(
+        role="Threat intelligence analyst for authorized penetration testing output.",
+        context=context,
+        body=body,
+        extra_rules=[
+            "Keep the analysis concise but thorough.",
+            "Reference vulnerability types, parameters, and MITRE technique IDs from this scan when present.",
+        ],
+    )
 
     return _call_gemini(api_key, prompt, max_tokens=4096)
 
@@ -184,11 +386,7 @@ def ai_remediation(
     )
     recommendation = finding.get("recommendation", "")
 
-    prompt = f"""You are a senior application security engineer providing remediation guidance.
-
-SCAN CONTEXT:
-{context}
-
+    body = f"""
 VULNERABILITY:
 - Type: {vuln_type}
 - Severity: {severity}
@@ -200,22 +398,28 @@ VULNERABILITY:
 - MITRE ATT&CK: {mitre}
 - Scanner recommendation: {recommendation[:200]}
 
-Provide SPECIFIC remediation guidance in HTML format (<strong>, <code>, <pre>, <ul><li>, <br>).
-Make it understandable for developers who may not be security experts.
+Provide specific remediation guidance with this structure:
+1. What's the risk? — explain in plain English what an attacker could do.
+2. Quick Fix — fastest immediate mitigation.
+3. Proper Fix — durable solution with concrete code/config examples.
+4. Verification — practical steps to confirm the fix.
 
-Include:
-1. **What's the risk?** — Explain in plain English what an attacker could do with this vulnerability.
-2. **Quick Fix** — The fastest thing to do RIGHT NOW to mitigate the risk.
-3. **Proper Fix** — The correct long-term solution with code examples where applicable.
-   - If it's a header issue, provide the exact header configuration.
-   - If it's XSS, show input sanitization code.
-   - If it's SQLi, show parameterized query examples.
-   - Tailor code to the detected tech stack if known.
-4. **Verification** — How to verify the fix works.
-
-Use <code> for inline code and <pre> for code blocks.
-Do NOT use markdown formatting. Use HTML only.
-Be specific to this vulnerability, not generic."""
+If relevant:
+- for header issues, include exact header configuration;
+- for XSS, include sanitization/encoding examples;
+- for SQLi, include parameterized query examples;
+- tailor examples to detected stack when context supports it.
+"""
+    prompt = _compose_prompt(
+        role="Application security engineer producing remediation guidance.",
+        context=context,
+        body=body,
+        extra_rules=[
+            "Keep language understandable to developers who are not security specialists.",
+            "Use <code> for inline code and <pre> for code blocks when examples are needed.",
+            "Keep guidance specific to this vulnerability instance.",
+        ],
+    )
 
     return _call_gemini(api_key, prompt, max_tokens=2048)
 
@@ -253,11 +457,7 @@ def ai_mitre_explain(
 
 Address the user's question directly as part of your response."""
 
-    prompt = f"""You are a senior threat intelligence analyst and cybersecurity educator.
-
-SCAN CONTEXT:
-{context}
-
+    body = f"""
 MITRE ATT&CK TECHNIQUE:
 - Technique ID: {technique_id}
 - Technique Name: {technique_name}
@@ -267,40 +467,29 @@ RELATED FINDINGS FROM THIS SCAN:
 {related_summary}
 {question_section}
 
-Provide a COMPREHENSIVE, EASY-TO-UNDERSTAND explanation in HTML format.
-Make it accessible for beginners while still being valuable for experts.
-
-Structure your response as:
-
+Provide a comprehensive explanation using this structure:
 1. <strong>What is {technique_id} ({technique_name})?</strong>
-   - Plain-English explanation (2-3 sentences). Explain like you're talking to someone who is NOT a security expert.
-   - Include a real-world analogy if helpful.
-
+   - Plain-English explanation (2-3 sentences).
 2. <strong>How Does This Attack Work?</strong>
-   - Step-by-step breakdown of how an attacker uses this technique.
-   - Be specific to web applications and the target: {target}
-   - Use numbered steps.
-
+   - Step-by-step breakdown, specific to web applications and target: {target}.
 3. <strong>Why Was This Detected in Your Scan?</strong>
-   - Explain which specific findings in this scan relate to this technique and why.
-   - If no related findings, explain what conditions would trigger it.
-
+   - Map to concrete findings, or explain likely trigger conditions if none map.
 4. <strong>Real-World Impact</strong>
-   - What could actually happen if this technique is exploited?
-   - Give concrete examples (data theft, account takeover, etc.).
-
+   - Concrete impact examples.
 5. <strong>How to Defend Against It</strong>
-   - Specific, actionable defense measures.
-   - Include code examples or configuration snippets where applicable.
-   - Tailor to the detected tech stack if known.
-
+   - Actionable defenses with code/config snippets where relevant.
 6. <strong>Detection Tips</strong>
-   - How security teams can detect this technique in their environment.
-   - Mention specific logs, tools, or indicators to watch for.
-
-Use HTML formatting: <strong>, <em>, <code>, <pre>, <ul><li>, <ol><li>, <br>.
-Do NOT use markdown. Keep it professional but approachable.
-Be specific to THIS scan and THIS target — not generic."""
+   - Logs, tools, and indicators defenders should monitor.
+"""
+    prompt = _compose_prompt(
+        role="Threat intelligence analyst and cybersecurity educator.",
+        context=context,
+        body=body,
+        extra_rules=[
+            "Keep the explanation accessible to beginners and useful for experienced practitioners.",
+            "Prefer concrete examples over abstract statements.",
+        ],
+    )
 
     return _call_gemini(api_key, prompt, max_tokens=4096)
 
@@ -321,11 +510,8 @@ def ai_executive_summary(
         if sev in sev_counts:
             sev_counts[sev] += 1
 
-    prompt = f"""You are a cybersecurity consultant writing an executive summary for a C-suite audience.
-
+    body = f"""
 TARGET: {target}
-SCAN CONTEXT:
-{context}
 
 SEVERITY BREAKDOWN:
 - Critical: {sev_counts['Critical']}
@@ -337,21 +523,21 @@ SEVERITY BREAKDOWN:
 FINDINGS OVERVIEW:
 {findings_summary}
 
-Write a PROFESSIONAL executive summary in HTML format. This will be read by non-technical executives.
-
-Structure:
-1. <strong>Overall Security Posture</strong> — One paragraph rating the target's security (use terms like Critical Risk, High Risk, Moderate Risk, Low Risk). Explain what this means in business terms.
-
-2. <strong>Key Risks</strong> — 3-5 bullet points describing the most important risks in PLAIN ENGLISH. No jargon. Example: "An attacker could steal user login credentials" not "XSS enables session hijacking via T1539".
-
-3. <strong>Business Impact</strong> — What could happen if these vulnerabilities are exploited? Think: data breach, regulatory fines, reputation damage, service disruption.
-
-4. <strong>Recommended Actions</strong> — 3-5 prioritized action items. Keep each to one sentence. Example: "Immediately implement security headers on all web pages."
-
-5. <strong>Timeline</strong> — Suggested fix timeline: what to do this week, this month, this quarter.
-
-Use HTML formatting (<strong>, <ul><li>, <br>, <em>).
-No MITRE IDs, no CVSS vectors, no technical jargon.
-Write for someone who understands business but NOT cybersecurity."""
+Write an executive summary for non-technical leaders with this structure:
+1. <strong>Overall Security Posture</strong> — one paragraph with a clear risk rating and business interpretation.
+2. <strong>Key Risks</strong> — 3-5 bullets in plain English.
+3. <strong>Business Impact</strong> — practical consequences (breach, fines, reputation, downtime).
+4. <strong>Recommended Actions</strong> — 3-5 prioritized, one-sentence actions.
+5. <strong>Timeline</strong> — what to do this week, this month, this quarter.
+"""
+    prompt = _compose_prompt(
+        role="Cybersecurity consultant writing for C-suite and business stakeholders.",
+        context=context,
+        body=body,
+        extra_rules=[
+            "Avoid MITRE IDs, CVSS vectors, and deep technical jargon.",
+            "Use plain business language and concrete outcomes.",
+        ],
+    )
 
     return _call_gemini(api_key, prompt, max_tokens=2048)

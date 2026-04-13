@@ -20,7 +20,8 @@
 |---|---|
 | **7-Stage Pipeline** | Target Input → Recon → Fingerprint → Crawl → Attack → CVSS Score → Export |
 | **Scan Modes** | `quick`, `full`, `web-only`, `network-only` |
-| **Web Vulnerability Modules** | SQL Injection, XSS, Security Headers, SSRF, IDOR, Open Redirect |
+| **Crawl Strategies** | `auto`, `httpx`, `selenium`, `hybrid` |
+| **Web Vulnerability Modules** | 23 modules: SQLi, XSS, Headers, SSRF, IDOR, Open Redirect, Command Injection, XXE, LFI, Sensitive Files, NoSQLi, SSTI, GraphQL Abuse, JWT Checks, Host Header Injection, CORS Misconfiguration, HPP, CRLF Injection, Request Smuggling, Mass Assignment/BOLA, Insecure Deserialization, Prototype Pollution, CSV/Formula Injection |
 | **Browser Engine** | Optional Selenium headless/headed Chrome for JS-heavy apps |
 | **MITRE ATT&CK v16.1** | 47 techniques across all 14 Enterprise tactics with confidence scoring, attack path analysis, and matrix coverage heatmap |
 | **OWASP 2025 Top 10** | Full A01–A10 category mapping for every finding |
@@ -58,6 +59,21 @@ c:\Project 1\
 │   │   ├── ssrf.py              # Server-Side Request Forgery
 │   │   ├── idor.py              # Insecure Direct Object Reference
 │   │   ├── open_redirect.py     # Open Redirect detection
+│   │   ├── command_injection.py # OS command injection checks
+│   │   ├── xxe.py               # XML external entity checks
+│   │   ├── lfi.py               # Path traversal / local file inclusion checks
+│   │   ├── sensitive_files.py   # Exposed sensitive file discovery
+│   │   ├── nosqli.py            # NoSQL injection checks
+│   │   ├── ssti.py              # Server-side template injection checks
+│   │   ├── graphql_abuse.py     # GraphQL introspection/depth abuse checks
+│   │   ├── jwt_checks.py        # JWT static security checks
+│   │   ├── host_header.py       # Host header injection checks
+│   │   ├── cors_misconfig.py    # CORS misconfiguration checks
+│   │   ├── hpp.py               # HTTP parameter pollution checks
+│   │   ├── crlf_injection.py    # CRLF injection checks
+│   │   ├── request_smuggling.py # HTTP request smuggling heuristic checks
+│   │   ├── mass_assignment.py   # Mass assignment + BOLA checks
+│   │   ├── insecure_deserialization.py # Insecure deserialization checks
 │   │   ├── sqli_selenium.py     # Browser-based SQLi with screenshots
 │   │   └── xss_selenium.py      # Browser-based XSS with alert() hook
 │   │
@@ -93,7 +109,8 @@ c:\Project 1\
 - **Python 3.13+**
 - **Node.js 18+** — required for DOCX report generation
 - **Nmap** — installed and in PATH ([https://nmap.org/download.html](https://nmap.org/download.html))
-- **Google Chrome** — required only for Selenium browser mode
+- **Google Chrome / Chromium / Edge** — required only for Selenium browser mode
+- **ChromeDriver / EdgeDriver** — required for Selenium browser mode
 
 ### Setup
 
@@ -108,6 +125,15 @@ python -m venv .venv
 # Install dependencies
 pip install -r scanner/requirements.txt
 npm install
+
+# Optional: configure Gemini AI keys
+# Windows PowerShell examples:
+#   $env:PENTAVAULT_GEMINI_API_KEYS="key1,key2"
+#   $env:PENTAVAULT_GEMINI_MODELS="gemini-2.0-flash,gemini-1.5-flash"
+# Or create a .env file in the project root with:
+#   PENTAVAULT_GEMINI_API_KEYS=key1,key2
+#   PENTAVAULT_GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash
+#   GEMINI_API_KEY=single_fallback_key
 ```
 
 ---
@@ -121,7 +147,7 @@ python -m scanner.web.app
 ```
 
 Open **http://127.0.0.1:8000** in a browser. The dashboard provides:
-- Scan configuration form (target, mode, threads, timeout, cookies, browser toggle)
+- Scan configuration form (target, mode, crawl mode, threads, timeout, cookies, browser toggle)
 - Live progress bar with real-time timer
 - Total elapsed time after scan completion
 - Severity breakdown (Critical / High / Medium / Low / Info)
@@ -157,6 +183,7 @@ python main.py \
   --threads 5 \
   --timeout 10 \
   --cookie "session=abc123" \
+  --crawl-mode hybrid \
   --browser \
   --output findings.json
 ```
@@ -171,6 +198,7 @@ python main.py \
 | `--timeout` | `10` | Per-request timeout in seconds |
 | `--cookie` | `None` | Session cookie for authenticated scans |
 | `--browser` | `off` | Use Selenium headless Chrome |
+| `--crawl-mode` | `auto` | `auto`, `httpx`, `selenium`, `hybrid` |
 | `--headed` | `off` | Show browser window (implies `--browser`) |
 | `--output` | `findings.json` | Output JSON report path |
 
@@ -184,7 +212,7 @@ python main.py \
 | **2. Reconnaissance** | DNS lookup, subdomain enumeration, WHOIS, Nmap port/service scan, OS fingerprinting |
 | **3. Fingerprinting** | Technology stack detection, WAF identification, SSL/TLS certificate analysis |
 | **4. Web Crawling** | Endpoint discovery, form extraction, parameter collection, JS API route detection |
-| **5. Vulnerability Testing** | Concurrent module execution: SQLi, XSS, Headers, SSRF, IDOR, Open Redirect |
+| **5. Vulnerability Testing** | Concurrent module execution across 23 modules (SQLi, XSS, Headers, SSRF, IDOR, Open Redirect, Command Injection, XXE, LFI, Sensitive Files, NoSQLi, SSTI, GraphQL Abuse, JWT Checks, Host Header Injection, CORS Misconfiguration, HPP, CRLF Injection, Request Smuggling, Mass Assignment/BOLA, Insecure Deserialization, Prototype Pollution, CSV/Formula Injection) |
 | **6. CVSS Scoring** | CVSS v3.1 scoring, severity classification, OWASP 2025 + MITRE ATT&CK mapping |
 | **7. Report Generation** | JSON reports (standard, executive, technical) with full metadata |
 
@@ -227,7 +255,7 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/` | Dashboard page |
-| `POST` | `/api/scan` | Start a new scan |
+| `POST` | `/api/scan` | Start a new scan (includes dependency preflight) |
 | `GET` | `/api/scan/{id}` | Get scan status/results |
 | `GET` | `/api/scan/{id}/findings` | Get findings only |
 | `GET` | `/api/scan/{id}/mitre` | Get MITRE breakdown for scan |
@@ -243,7 +271,7 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 | `POST` | `/api/ai/executive-summary` | AI-powered executive summary |
 | `POST` | `/api/ai/mitre-explain` | AI technique explainer with personalized Q&A |
 | `GET` | `/api/scan/{id}/report/pdf` | Download professional PDF report |
-| `GET` | `/api/scan/{id}/report/docx` | Download DOCX report |
+| `GET` | `/api/scan/{id}/report/docx` | Download DOCX report (Node.js preflight required) |
 
 ---
 
@@ -288,7 +316,7 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 - **Comprehensive Scan Logging** — All scan stages emit detailed log messages for debugging
 
 **Bug Fixes:**
-- **Scan Mode Differentiation** — `quick` parameter now correctly passed to all 6 vulnerability modules (SQLi, XSS, SSRF, IDOR, Open Redirect) and CLI; quick scans are genuinely faster
+- **Scan Mode Differentiation** — `quick` parameter now correctly passed through vulnerability modules and CLI, ensuring quick scans reduce payload and endpoint scope consistently
 - **Selenium Toggle** — Fixed browser toggle so it correctly switches between httpx and Selenium crawling/testing mid-scan
 - **Cancel Safety** — All cancel checkpoints now properly set `status=cancelled`, `completed_at`, and persist to history before returning (previously some left scans stuck as "running")
 - **Unreachable Target Handling** — Connectivity pre-check now sets `status=failed` (not `error`) so the frontend correctly stops polling and shows the failure

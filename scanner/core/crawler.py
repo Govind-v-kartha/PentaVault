@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import time
 from urllib.parse import urljoin, urlparse, parse_qs
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from bs4 import BeautifulSoup
@@ -84,6 +85,8 @@ def crawl(
     cookie: str | None = None,
     timeout: float = 10.0,
     respect_robots: bool = True,
+    should_stop: Callable[[], bool] | None = None,
+    request_delay: float = 0.0,
 ) -> CrawlResult:
     """Crawl *base_url* up to *max_depth* levels, collecting endpoints and forms."""
     log.info("=== STAGE 04: Web Crawler — %s ===", base_url)
@@ -107,6 +110,9 @@ def crawl(
         headers=headers,
     ) as client:
         while queue and len(visited) < max_pages:
+            if should_stop and should_stop():
+                log.info("Crawl cancelled after %d visited pages", len(visited))
+                break
             url, depth = queue.pop(0)
 
             normalized = urlparse(url)._replace(fragment="").geturl()
@@ -123,6 +129,8 @@ def crawl(
             for param in parse_qs(urlparse(normalized).query):
                 result.parameters.add(param)
 
+            if request_delay > 0:
+                time.sleep(request_delay)
             try:
                 resp = client.get(normalized)
             except httpx.HTTPError as exc:

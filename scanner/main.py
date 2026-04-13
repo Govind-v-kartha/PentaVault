@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
 # Ensure the parent directory of the scanner package is on sys.path so that
 # ``python main.py`` works regardless of the working directory.
 _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +35,8 @@ from scanner.utils.report_exporter import export_json
 from scanner.core.recon import run_recon
 from scanner.core.port_scanner import scan_ports
 from scanner.core.fingerprint import run_fingerprint
-from scanner.core.crawler import crawl
+from scanner.core.crawler import CrawlResult, crawl
+from scanner.core.dependency_check import check_dependencies
 from scanner.core.scorer import enrich_findings
 from scanner.modules.sqli import test_sqli
 from scanner.modules.xss import test_xss
@@ -43,6 +46,23 @@ from scanner.modules.idor import test_idor
 from scanner.modules.open_redirect import test_open_redirect
 from scanner.modules.sqli_selenium import test_sqli_selenium
 from scanner.modules.xss_selenium import test_xss_selenium
+from scanner.modules.command_injection import test_command_injection
+from scanner.modules.xxe import test_xxe
+from scanner.modules.lfi import test_lfi
+from scanner.modules.sensitive_files import test_sensitive_files
+from scanner.modules.nosqli import test_nosqli
+from scanner.modules.ssti import test_ssti
+from scanner.modules.graphql_abuse import test_graphql_abuse
+from scanner.modules.jwt_checks import test_jwt_checks
+from scanner.modules.host_header import test_host_header_injection
+from scanner.modules.cors_misconfig import test_cors_misconfig
+from scanner.modules.hpp import test_hpp
+from scanner.modules.crlf_injection import test_crlf_injection
+from scanner.modules.request_smuggling import test_request_smuggling
+from scanner.modules.mass_assignment import test_mass_assignment_bola
+from scanner.modules.insecure_deserialization import test_insecure_deserialization
+from scanner.modules.prototype_pollution import test_prototype_pollution
+from scanner.modules.csv_formula_injection import test_csv_formula_injection
 
 
 BANNER = r"""
@@ -52,6 +72,15 @@ BANNER = r"""
   ║   --browser  →  Selenium-powered scanning    ║
   ╚══════════════════════════════════════════════╝
 """
+
+
+def _print_banner() -> None:
+    try:
+        print(BANNER)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_banner = BANNER.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe_banner)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -86,9 +115,19 @@ def _parse_args() -> argparse.Namespace:
         help="Per-request timeout in seconds (default: 10)",
     )
     parser.add_argument(
+        "--request-delay", type=float, default=0.0,
+        help="Delay in seconds between crawler requests/navigation (default: 0)",
+    )
+    parser.add_argument(
         "--browser", action="store_true", default=False,
         help="Use Selenium (headless Chrome) for crawling and vulnerability testing. "
              "More accurate — renders JS, confirms XSS via real alert(), captures screenshots.",
+    )
+    parser.add_argument(
+        "--crawl-mode",
+        choices=["auto", "httpx", "selenium", "hybrid"],
+        default="auto",
+        help="Crawler strategy: auto/httpx/selenium/hybrid (default: auto)",
     )
     parser.add_argument(
         "--headed", action="store_true", default=False,
@@ -124,6 +163,7 @@ def _run_web_modules(
     quick: bool = False,
     use_browser: bool = False,
     headless: bool = True,
+    should_stop=None,
 ) -> list[dict[str, Any]]:
     """Execute all web vulnerability modules concurrently."""
     log = get_logger("main")
@@ -134,30 +174,107 @@ def _run_web_modules(
     def _sqli():
         if use_browser:
             return test_sqli_selenium(
-                endpoints, forms, cookie=cookie,
-                headless=headless, quick=quick, evidence_dir=evidence_dir,
+                endpoints,
+                forms,
+                cookie=cookie,
+                headless=headless,
+                quick=quick,
+                evidence_dir=evidence_dir,
+                should_stop=should_stop,
             )
-        return test_sqli(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick)
+        return test_sqli(
+            endpoints,
+            forms,
+            cookie=cookie,
+            timeout=timeout,
+            quick=quick,
+            should_stop=should_stop,
+        )
 
     def _xss():
         if use_browser:
             return test_xss_selenium(
-                endpoints, forms, waf_detected=waf_detected, cookie=cookie,
-                headless=headless, quick=quick, evidence_dir=evidence_dir,
+                endpoints,
+                forms,
+                waf_detected=waf_detected,
+                cookie=cookie,
+                headless=headless,
+                quick=quick,
+                evidence_dir=evidence_dir,
+                should_stop=should_stop,
             )
-        return test_xss(endpoints, forms, waf_detected=waf_detected, cookie=cookie, timeout=timeout, quick=quick)
+        return test_xss(
+            endpoints,
+            forms,
+            waf_detected=waf_detected,
+            cookie=cookie,
+            timeout=timeout,
+            quick=quick,
+            should_stop=should_stop,
+        )
 
     def _hdrs():
-        return test_headers(base_url, cookie=cookie, timeout=timeout)
+        return test_headers(base_url, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
 
     def _ssrf():
-        return test_ssrf(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick)
+        return test_ssrf(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
 
     def _idor():
-        return test_idor(endpoints, cookie=cookie, timeout=timeout, quick=quick)
+        return test_idor(endpoints, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
 
     def _redirect():
-        return test_open_redirect(endpoints, cookie=cookie, timeout=timeout, quick=quick)
+        return test_open_redirect(endpoints, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _cmdi():
+        return test_command_injection(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _xxe():
+        return test_xxe(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _lfi():
+        return test_lfi(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _sensitive_files():
+        return test_sensitive_files(base_url, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _nosqli():
+        return test_nosqli(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _ssti():
+        return test_ssti(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _graphql():
+        return test_graphql_abuse(base_url, endpoints, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _jwt():
+        return test_jwt_checks(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _host_header():
+        return test_host_header_injection(base_url, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _cors():
+        return test_cors_misconfig(base_url, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _hpp():
+        return test_hpp(endpoints, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _crlf():
+        return test_crlf_injection(endpoints, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _request_smuggling():
+        return test_request_smuggling(base_url, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _mass_assignment_bola():
+        return test_mass_assignment_bola(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _insecure_deserialization():
+        return test_insecure_deserialization(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _prototype_pollution():
+        return test_prototype_pollution(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
+
+    def _csv_formula_injection():
+        return test_csv_formula_injection(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
 
     def _timed(name: str, fn):
         """Wrapper that times a module and logs duration."""
@@ -173,6 +290,23 @@ def _run_web_modules(
         "SSRF": _ssrf,
         "IDOR": _idor,
         "Open Redirect": _redirect,
+        "Command Injection": _cmdi,
+        "XXE": _xxe,
+        "LFI": _lfi,
+        "Sensitive Files": _sensitive_files,
+        "NoSQLi": _nosqli,
+        "SSTI": _ssti,
+        "GraphQL Abuse": _graphql,
+        "JWT Checks": _jwt,
+        "Host Header Injection": _host_header,
+        "CORS Misconfiguration": _cors,
+        "HTTP Parameter Pollution": _hpp,
+        "CRLF Injection": _crlf,
+        "Request Smuggling": _request_smuggling,
+        "Mass Assignment/BOLA": _mass_assignment_bola,
+        "Insecure Deserialization": _insecure_deserialization,
+        "Prototype Pollution": _prototype_pollution,
+        "CSV/Formula Injection": _csv_formula_injection,
     }
 
     if use_browser:
@@ -213,9 +347,20 @@ def _run_web_modules(
     return all_findings
 
 
+def _merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlResult:
+    merged = CrawlResult()
+    merged.endpoints = list(dict.fromkeys(primary.endpoints + fallback.endpoints))
+    merged.forms = primary.forms + fallback.forms
+    merged.parameters = set(primary.parameters) | set(fallback.parameters)
+    merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
+    merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
+    return merged
+
+
 def main() -> None:
-    print(BANNER)
+    _print_banner()
     args = _parse_args()
+    load_dotenv(os.path.join(_PROJECT_DIR, ".env"))
     setup_logger()
     log = get_logger("main")
 
@@ -227,8 +372,22 @@ def main() -> None:
     url, hostname, is_url = _normalise_target(args.target)
     use_browser = args.browser or args.headed
     headless = not args.headed
-    log.info("Target: %s | Mode: %s | Threads: %d | Browser: %s",
-             url, args.mode, args.threads, "headed" if args.headed else ("headless" if use_browser else "off"))
+    args.request_delay = max(0.0, args.request_delay)
+
+    if args.request_delay > 2.0:
+        log.warning("Request delay %.2fs exceeds max (2.0), clamping to 2.0", args.request_delay)
+        args.request_delay = 2.0
+
+    dep = check_dependencies(mode=args.mode, use_browser=use_browser)
+    for warning in dep["warnings"]:
+        log.warning("Preflight: %s", warning)
+    if not dep["ok"]:
+        for err in dep["errors"]:
+            log.error("Preflight: %s", err)
+        raise SystemExit("Cannot start scan due to missing dependencies.")
+
+    log.info("Target: %s | Mode: %s | Threads: %d | Browser: %s | Crawl mode: %s | Request delay: %.2fs",
+             url, args.mode, args.threads, "headed" if args.headed else ("headless" if use_browser else "off"), args.crawl_mode, args.request_delay)
     start = time.monotonic()
 
     recon_data: dict[str, Any] = {}
@@ -273,15 +432,52 @@ def main() -> None:
     if args.mode in ("full", "web-only", "quick") and is_url:
         max_depth = 2 if args.mode == "quick" else 3
         max_pages = 50 if args.mode == "quick" else 200
-        if use_browser:
+        crawler_mode = args.crawl_mode
+        if crawler_mode == "auto":
+            crawler_mode = "selenium" if use_browser else "httpx"
+
+        crawl_result: CrawlResult
+        crawler_label = "Crawler"
+
+        if crawler_mode == "selenium":
             from scanner.core.selenium_crawler import selenium_crawl
+
             crawl_result = selenium_crawl(
                 url,
                 max_depth=max_depth,
                 max_pages=max_pages,
                 cookie=args.cookie,
                 headless=headless,
+                request_delay=args.request_delay,
             )
+            crawler_label = "Selenium Crawler"
+        elif crawler_mode == "hybrid":
+            from scanner.core.selenium_crawler import selenium_crawl
+
+            primary = crawl(
+                url,
+                max_depth=max_depth,
+                max_pages=max_pages,
+                cookie=args.cookie,
+                timeout=args.timeout,
+                respect_robots=(args.mode == "quick"),
+                request_delay=args.request_delay,
+            )
+            needs_fallback = len(primary.endpoints) < 5 or len(primary.forms) < 1
+            if needs_fallback:
+                fallback = selenium_crawl(
+                    url,
+                    max_depth=max_depth,
+                    max_pages=max_pages,
+                    cookie=args.cookie,
+                    headless=headless,
+                    request_delay=args.request_delay,
+                )
+                crawl_result = _merge_crawl_results(primary, fallback)
+                crawler_label = "Hybrid Crawler"
+            else:
+                crawl_result = primary
+                crawler_label = "Crawler"
         else:
             crawl_result = crawl(
                 url,
@@ -290,11 +486,13 @@ def main() -> None:
                 cookie=args.cookie,
                 timeout=args.timeout,
                 respect_robots=(args.mode == "quick"),
+                request_delay=args.request_delay,
             )
+            crawler_label = "Crawler"
+
         endpoints = crawl_result.endpoints
         forms = crawl_result.forms
         crawl_summary = crawl_result.summary()
-        crawler_label = "Selenium Crawler" if use_browser else "Crawler"
         stage_times.append((crawler_label, time.monotonic() - t_stage))
     else:
         log.info("Skipping web crawl (mode=%s)", args.mode)
@@ -352,24 +550,45 @@ def main() -> None:
     # Print summary to console
     from scanner.utils.report_exporter import _build_summary
     summary = _build_summary(all_findings)
-    print(f"\n{'='*55}")
-    print(f"  SCAN COMPLETE — {url}")
-    print(f"  Risk Rating    : {summary['risk_rating']}")
-    print(f"  Total findings : {summary['total_findings']}")
-    print(f"  Critical: {summary['critical']}  |  High: {summary['high']}  |  "
-          f"Medium: {summary['medium']}  |  Low: {summary['low']}")
-    print(f"  {'─'*51}")
-    print(f"  Stage Timings:")
-    for stage_name, stage_elapsed in stage_times:
-        print(f"    {stage_name:<30s} {stage_elapsed:>6.1f}s")
-    print(f"    {'─'*37}")
-    print(f"    {'Total':<30s} {elapsed:>6.1f}s")
-    print(f"  {'─'*51}")
-    print(f"  Reports:")
-    print(f"    Full      → {os.path.abspath(report_path)}")
-    print(f"    Executive → {os.path.abspath(exec_path)}")
-    print(f"    Technical → {os.path.abspath(tech_path)}")
-    print(f"{'='*55}\n")
+
+    try:
+        print(f"\n{'='*55}")
+        print(f"  SCAN COMPLETE — {url}")
+        print(f"  Risk Rating    : {summary['risk_rating']}")
+        print(f"  Total findings : {summary['total_findings']}")
+        print(f"  Critical: {summary['critical']}  |  High: {summary['high']}  |  "
+              f"Medium: {summary['medium']}  |  Low: {summary['low']}")
+        print(f"  {'─'*51}")
+        print(f"  Stage Timings:")
+        for stage_name, stage_elapsed in stage_times:
+            print(f"    {stage_name:<30s} {stage_elapsed:>6.1f}s")
+        print(f"    {'─'*37}")
+        print(f"    {'Total':<30s} {elapsed:>6.1f}s")
+        print(f"  {'─'*51}")
+        print(f"  Reports:")
+        print(f"    Full      → {os.path.abspath(report_path)}")
+        print(f"    Executive → {os.path.abspath(exec_path)}")
+        print(f"    Technical → {os.path.abspath(tech_path)}")
+        print(f"{'='*55}\n")
+    except UnicodeEncodeError:
+        print(f"\n{'='*55}")
+        print(f"  SCAN COMPLETE - {url}")
+        print(f"  Risk Rating    : {summary['risk_rating']}")
+        print(f"  Total findings : {summary['total_findings']}")
+        print(f"  Critical: {summary['critical']}  |  High: {summary['high']}  |  "
+              f"Medium: {summary['medium']}  |  Low: {summary['low']}")
+        print(f"  {'-'*51}")
+        print(f"  Stage Timings:")
+        for stage_name, stage_elapsed in stage_times:
+            print(f"    {stage_name:<30s} {stage_elapsed:>6.1f}s")
+        print(f"    {'-'*37}")
+        print(f"    {'Total':<30s} {elapsed:>6.1f}s")
+        print(f"  {'-'*51}")
+        print(f"  Reports:")
+        print(f"    Full      -> {os.path.abspath(report_path)}")
+        print(f"    Executive -> {os.path.abspath(exec_path)}")
+        print(f"    Technical -> {os.path.abspath(tech_path)}")
+        print(f"{'='*55}\n")
 
 
 if __name__ == "__main__":

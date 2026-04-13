@@ -7,7 +7,7 @@ to external domains.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import httpx
@@ -18,12 +18,25 @@ log = get_logger("open_redirect")
 
 _REDIRECT_PAYLOADS = [
     "https://evil.com",
+    "http://evil.com",
     "//evil.com",
     "/\\evil.com",
     "https://evil.com/%2f..",
     "////evil.com",
     "https:///evil.com",
     "\\\\evil.com",
+    "https:%2f%2fevil.com",
+    "//evil.com/%2e%2e",
+    "/%09/evil.com",
+    "https://trusted.com@evil.com",
+    "https://evil.com#@trusted.com",
+    "//%65%76%69%6c.com",
+    "//evil.com/%2F%2E%2E",
+    "//evil.com/%252f%252e%252e",
+    "https://evil.com%2f@trusted.com",
+    "https://evil.com?.trusted.com",
+    "https://evil.com/%0d%0aLocation:%20https://trusted.com",
+    "//evil.com/%09trusted.com",
 ]
 
 _URL_PARAM_NAMES = re.compile(
@@ -45,6 +58,7 @@ def test_open_redirect(
     cookie: str | None = None,
     timeout: float = 10.0,
     quick: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Test URL-like GET parameters for open redirect vulnerabilities.
 
@@ -67,8 +81,14 @@ def test_open_redirect(
         headers=headers,
     ) as client:
         for url in endpoints:
+            if should_stop and should_stop():
+                log.info("Open redirect scan cancelled during endpoint traversal")
+                break
             qs = parse_qs(urlparse(url).query, keep_blank_values=True)
             for param in qs:
+                if should_stop and should_stop():
+                    log.info("Open redirect scan cancelled while testing %s", urlparse(url).path)
+                    break
                 if not _URL_PARAM_NAMES.search(param):
                     continue
                 sig = (urlparse(url).path, param)
@@ -76,6 +96,8 @@ def test_open_redirect(
                     continue
                 seen.add(sig)
                 for payload in _REDIRECT_PAYLOADS:
+                    if should_stop and should_stop():
+                        break
                     target = _inject_param(url, param, payload)
                     try:
                         resp = client.get(target)

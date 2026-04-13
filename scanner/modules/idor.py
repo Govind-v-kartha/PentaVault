@@ -7,7 +7,7 @@ to detect unauthorized data exposure.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -45,6 +45,7 @@ def test_idor(
     timeout: float = 10.0,
     id_offset: int = 5,
     quick: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Test for IDOR by incrementing/decrementing numeric IDs in endpoint paths.
 
@@ -66,11 +67,17 @@ def test_idor(
         verify=False, timeout=timeout, follow_redirects=True, headers=headers
     ) as client:
         for url in endpoints:
+            if should_stop and should_stop():
+                log.info("IDOR scan cancelled during endpoint traversal")
+                break
             id_matches = _find_id_in_url(url)
             if not id_matches:
                 continue
 
             for prefix, suffix, original_id in id_matches:
+                if should_stop and should_stop():
+                    log.info("IDOR scan cancelled while testing %s", urlparse(url).path)
+                    break
                 sig = f"{prefix}|{suffix}"
                 if sig in tested:
                     continue
@@ -87,7 +94,11 @@ def test_idor(
 
                 # Try adjacent IDs
                 for delta in range(1, id_offset + 1):
+                    if should_stop and should_stop():
+                        break
                     for new_id in (original_id + delta, original_id - delta):
+                        if should_stop and should_stop():
+                            break
                         if new_id < 0:
                             continue
                         alt_url = _replace_id(url, prefix, suffix, original_id, new_id)

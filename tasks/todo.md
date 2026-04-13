@@ -1,0 +1,149 @@
+# PentaVault Task Plan — Advanced Module Expansion
+
+## Plan
+
+- [x] Audit existing module orchestration in CLI and GUI to identify integration points.
+- [x] Add regression tests first for command injection and XXE modules (red tests).
+- [x] Implement `scanner/modules/command_injection.py` with quick/full payload sets, cancellation checks, and false-positive guardrails.
+- [x] Implement `scanner/modules/xxe.py` with XML-focused payloads, cancellation checks, and response-evidence heuristics.
+- [x] Wire both modules into CLI and GUI module orchestration with parity.
+- [x] Add/extend orchestration tests to verify modules execute in both paths.
+- [x] Update context documentation to reflect new modules and behavior.
+- [x] Run targeted + full unittest suite and record results.
+- [x] Implement protocol/API checks: GraphQL abuse, JWT checks, host-header injection, CORS misconfiguration.
+- [x] Implement request/response parser abuse checks: HTTP parameter pollution (HPP), CRLF injection, request smuggling probes.
+- [x] Implement data-model abuse checks: mass assignment/BOLA and insecure deserialization probes.
+- [x] Integrate all newly added modules into CLI and GUI orchestration with parity.
+- [x] Add regression tests for new advanced modules and re-run full suite.
+- [x] Expand payload libraries across existing modules: command injection, XXE, LFI, NoSQLi, SSTI, mass assignment.
+- [x] Implement `scanner/modules/prototype_pollution.py` with non-destructive probe keys, quick/full behavior, and cancellation checks.
+- [x] Implement `scanner/modules/csv_formula_injection.py` with formula-prefix probes, quick/full behavior, and cancellation checks.
+- [x] Wire prototype pollution and CSV/formula modules into CLI and GUI orchestration with parity.
+- [x] Add/extend tests for prototype pollution + CSV/formula modules and orchestration/payload coverage.
+- [x] Re-run targeted + full unittest suite after payload/module expansion.
+- [x] Optimize AI prompt composition to remove repeated persona boilerplate while preserving endpoint output structure.
+- [x] Add deterministic per-scan AI endpoint response caching for analyze/remediate/executive-summary/mitre-explain.
+- [x] Add AI integration regression tests for prompt composition + endpoint caching behavior.
+- [x] Re-run targeted AI suite + full unittest regression after AI optimization changes.
+- [x] Improve mapping UX states (loading/error/empty) for OWASP and MITRE sections.
+- [x] Add MITRE results controls (tactic/confidence/search/clear) and heatmap-driven tactic filtering.
+- [x] Add MITRE reference usability controls (search + expand/collapse) with keyboard-accessible cards.
+- [x] Add frontend mapping race guards and mapping cache reuse across OWASP/MITRE views.
+- [x] Add backend per-scan MITRE endpoint cache keyed by findings signature.
+- [x] Add regression tests for MITRE endpoint cache reuse/invalidation/response shape.
+- [x] Re-run targeted mapping tests + full unittest regression after mapping optimization changes.
+
+## UI Redesign Execution Plan (SOC Obsidian)
+
+- [x] Replace `scanner/web/static/index.html` with command-rail + stage layout, panel architecture, and modal containers while preserving API hook IDs.
+- [x] Replace `scanner/web/static/style.css` with SOC Obsidian design system (new typography, color tokens, glass depth, transitions, responsive rules).
+- [x] Replace `scanner/web/static/app.js` with new interaction engine including panel transitions, scan lifecycle, AI actions, and exports using existing backend contracts.
+- [x] Implement Three.js scene managers for threat globe, MITRE matrix, attack graph, and scan progress engine with reduced-motion fallback.
+- [x] Implement D3/Canvas visuals for severity ring, OWASP treemap, kill-chain timeline, and modal CVSS gauge.
+- [x] Run frontend smoke validation in a real browser session and rerun full unittest regression.
+- [x] Update `tasks/todo.md` review and `context.md` to reflect the redesigned frontend architecture.
+
+## Review
+
+- Implemented two new HTTP modules:
+  - `scanner/modules/command_injection.py`
+  - `scanner/modules/xxe.py`
+- Integrated both modules into:
+  - CLI orchestration (`scanner/main.py`)
+  - Web orchestration (`scanner/web/app.py`)
+- Added regression coverage:
+  - `scanner/tests/test_command_injection_module.py`
+  - `scanner/tests/test_xxe_module.py`
+  - `scanner/tests/test_module_orchestration_new_modules.py` (extended for all advanced modules incl. data-model modules)
+  - `scanner/tests/test_payload_sets.py` (extended for new advanced payload/path sets incl. mass assignment + deserialization)
+  - `scanner/tests/test_protocol_abuse_modules.py` (GraphQL/JWT/Host Header/CORS/HPP/CRLF/Request Smuggling)
+  - `scanner/tests/test_data_model_abuse_modules.py` (Mass Assignment/BOLA + Insecure Deserialization)
+- Validation results:
+  - Targeted tests (legacy wave): `python -m unittest scanner.tests.test_command_injection_module scanner.tests.test_xxe_module scanner.tests.test_module_orchestration_new_modules scanner.tests.test_payload_sets` → OK
+  - Full suite (legacy wave): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 44 tests, OK
+  - Targeted tests (advanced orchestration + protocol abuse): `python -m unittest scanner.tests.test_protocol_abuse_modules scanner.tests.test_module_orchestration_new_modules scanner.tests.test_payload_sets scanner.tests.test_lfi_module scanner.tests.test_sensitive_files_module scanner.tests.test_nosqli_module scanner.tests.test_ssti_module` → Ran 34 tests, OK
+  - Targeted tests (data-model abuse + orchestration): `python -m unittest scanner.tests.test_data_model_abuse_modules scanner.tests.test_module_orchestration_new_modules scanner.tests.test_payload_sets` → Ran 26 tests, OK
+  - Full suite (post-advanced integration): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 77 tests, OK
+  - Full suite (post-data-model integration): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 83 tests, OK
+  - Final verification rerun (targeted + full): `python -m unittest scanner.tests.test_data_model_abuse_modules scanner.tests.test_module_orchestration_new_modules scanner.tests.test_payload_sets && python -m unittest discover -s scanner/tests -p "test_*.py"` → Targeted 26 tests OK, full 83 tests OK
+  - Payload expansion targeted suite: `python -m unittest scanner.tests.test_prototype_pollution_module scanner.tests.test_csv_formula_injection_module scanner.tests.test_module_orchestration_new_modules scanner.tests.test_payload_sets scanner.tests.test_command_injection_module scanner.tests.test_xxe_module scanner.tests.test_lfi_module scanner.tests.test_nosqli_module scanner.tests.test_ssti_module scanner.tests.test_data_model_abuse_modules scanner.tests.test_protocol_abuse_modules` → Ran 56 tests, OK
+  - Full suite (post-payload expansion): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 89 tests, OK
+  - Targeted AI optimization suite: `python -m unittest scanner.tests.test_ai_engine_config_and_fallback scanner.tests.test_ai_engine_prompt_composition scanner.tests.test_ai_endpoints_cache` → Ran 15 tests, OK
+  - AI-focused discovery: `python -m unittest discover -s scanner/tests -p "test_ai*.py"` → Ran 15 tests, OK
+  - Full suite (post-AI optimization + cache integration): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 99 tests, OK
+  - Targeted mapping cache suite: `python -m unittest scanner.tests.test_mitre_endpoint_cache scanner.tests.test_ai_endpoints_cache` → Ran 8 tests, OK
+  - Full suite (post-mapping UX + MITRE cache integration): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 102 tests, OK
+  - Targeted AI failover + contract + endpoint cache: `python -m unittest scanner.tests.test_ai_engine_config_and_fallback scanner.tests.test_ai_error_contract scanner.tests.test_ai_endpoints_cache` → Ran 20 tests, OK
+  - Targeted runtime + MITRE cache: `python -m unittest scanner.tests.test_scan_runtime_metadata scanner.tests.test_mitre_endpoint_cache` → Ran 6 tests, OK
+  - Full suite (post key-pool cooldown-reuse test + dashboard KPI refresh): `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 114 tests, OK
+
+- Production hardening updates completed:
+  - Backend AI endpoints now return sanitized structured error contracts (`{code,message,retryable}`) without leaking provider/key internals:
+    - `/api/ai/analyze`
+    - `/api/ai/remediate`
+    - `/api/ai/executive-summary`
+    - `/api/ai/mitre-explain`
+  - AI engine now uses a process-local key pool with persistent round-robin rotation, per-key cooldown backoff, invalid-key disablement, and model fallback while preserving existing public API signatures.
+  - Runtime execution metadata is now surfaced end-to-end (`runtime_config`, `execution_metadata`) and rendered in dashboard runtime cards.
+  - Dashboard shell modernized with stronger header/tab composition and new KPI visual cards (severity donut, module distribution bar, history trend line).
+  - MITRE coverage upgraded to ECharts interactive tactic chart with resilient fallback to matrix heatmap.
+  - Attack path view redesigned to a readable, collapsible timeline layout with phase progression and finding-level detail.
+  - Corrected ECharts CDN script integrity hash in `scanner/web/static/index.html` so chart loads reliably when CDN is reachable.
+- Additional regression verification:
+  - `python -m unittest scanner.tests.test_ai_endpoints_cache scanner.tests.test_ai_error_contract` → Ran 8 tests, OK
+  - `python -m unittest scanner.tests.test_scan_runtime_metadata scanner.tests.test_mitre_endpoint_cache` → Ran 6 tests, OK
+  - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 108 tests, OK
+- Manual browser validation (Selenium against live dashboard @ `http://127.0.0.1:8010`):
+  - Runtime cards visible with 7 runtime metrics.
+  - Execution settings card visible.
+  - MITRE ECharts rendered (`chart_exists=true`, `chart_canvas=1`) with fallback unused in this run (`matrix_fallback_cells=0`).
+  - Attack path timeline rendered (`attack_timeline=1`, `attack_steps=5`).
+- SOC Obsidian redesign validation (post full static replacement):
+  - Unit tests:
+    - `python -m unittest scanner.tests.test_ai_engine_config_and_fallback scanner.tests.test_ai_error_contract scanner.tests.test_ai_endpoints_cache` → Ran 20 tests, OK
+    - `python -m unittest scanner.tests.test_scan_runtime_metadata scanner.tests.test_mitre_endpoint_cache` → Ran 6 tests, OK
+    - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 114 tests, OK
+  - Frontend syntax sanity:
+    - `node --check scanner/web/static/app.js` → OK
+  - Browser smoke (desktop, Selenium):
+    - Command rail tabs switch correctly (`scan/history/owasp/mitre` all active on click).
+    - Quick scan completed end-to-end with results panel visible and findings table populated (`findings_rows=5`).
+    - Visual layers rendered: `attackGraphScene.canvas=1`, `progress3dScene.canvas=1`, `mitreMatrixScene.canvas=1`, `severityChart.svg=1`, `owaspBreakdown.svg=1`.
+    - Findings modal opens from table rows; CVSS gauge renders; mitigation controls available.
+    - AI error UX remains sanitized under missing-key condition (`AI service is not configured for this environment.`) with no provider/key leakage.
+    - History panel renders archived missions (`history_items=33`).
+  - Browser smoke (mobile width, Selenium headless `390x844`):
+    - No horizontal overflow (`body_overflow_x=0`).
+    - Rail tabs and panels remain usable; scan + results flow still functional.
+    - Core visuals still render (`progress3dScene.canvas=1`, `mitreMatrixScene.canvas=1`, `severityChart.svg=1`).
+  - Reduced-motion validation:
+    - `prefers-reduced-motion` path confirmed (`matchMedia=true`) with static fallback cards shown for 3D scenes while scan/results continue to function.
+  - Final regression rerun after documentation updates:
+    - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 114 tests, OK
+
+- Browser-engine + result-visibility hotfix validation:
+  - Root-cause verification:
+    - Browser mode start previously failed preflight with 400 (`Chrome/Chromium binary not found on PATH`, `chromedriver binary not found on PATH`) despite local browser availability.
+    - Scan results were hidden when returning to Scan tab because `activeScanId` stayed null and tab handler reset the form.
+  - Fixes applied:
+    - `scanner/core/dependency_check.py` now accepts browser availability from:
+      - PATH binaries, or
+      - explicit env hints (`CHROME_PATH`, `GOOGLE_CHROME_BIN`, `PENTAVAULT_CHROME_BINARY`, `EDGE_PATH`, `PENTAVAULT_EDGE_BINARY`), or
+      - standard Windows Chrome/Edge install paths.
+    - Missing chromedriver is downgraded from hard error to warning (`Selenium manager will attempt automatic driver resolution`).
+    - `scanner/web/static/app.js` now persists completed results context on Scan tab return and sets `activeScanId` in `showResults(...)`.
+  - API/runtime verification:
+    - `POST /api/scan` with `use_browser=true,crawl_mode=selenium` now returns 200 (`status: started`).
+    - Browser-mode scan completed successfully with warnings only and expected execution metadata:
+      - `resolved_crawl_mode=selenium`
+      - `browser_module_execution=sequential`
+      - `browser_module_count=2`
+      - `findings_count=5`
+  - UI verification:
+    - After scan completion, switching `scan -> history -> scan` keeps results visible (`results_after_tab_back=block`, rows retained).
+  - Regression tests:
+    - `python -m unittest scanner.tests.test_dependency_check` → Ran 5 tests, OK
+    - `python -m unittest scanner.tests.test_dependency_check scanner.tests.test_scan_runtime_metadata scanner.tests.test_module_orchestration_new_modules` → Ran 10 tests, OK
+    - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 116 tests, OK
+  - JS syntax check:
+    - `node --check scanner/web/static/app.js` → OK

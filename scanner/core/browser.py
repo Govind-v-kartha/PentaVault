@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from typing import Generator
+from urllib.parse import urlparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -29,7 +30,9 @@ def _chrome_options(
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
+    # Keep sandbox enabled by default; allow opt-out only when explicitly requested.
+    if os.environ.get("PENTAVAULT_ALLOW_NO_SANDBOX") == "1":
+        opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-extensions")
@@ -74,13 +77,26 @@ def inject_cookie(driver: webdriver.Chrome, url: str, cookie_str: str | None) ->
     """Load *url* and inject a raw cookie string (e.g. ``session=abc123``)."""
     if not cookie_str:
         return
+    parsed = urlparse(url)
+    domain = parsed.hostname
+    if not domain:
+        return
     driver.get(url)
     for part in cookie_str.split(";"):
         part = part.strip()
         if "=" not in part:
             continue
         name, value = part.split("=", 1)
-        driver.add_cookie({"name": name.strip(), "value": value.strip()})
+        cookie = {
+            "name": name.strip(),
+            "value": value.strip(),
+            "domain": domain,
+            "path": "/",
+        }
+        try:
+            driver.add_cookie(cookie)
+        except Exception as exc:
+            log.debug("Cookie injection skipped for %s: %s", name.strip(), exc)
     driver.refresh()
 
 

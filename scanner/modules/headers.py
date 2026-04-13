@@ -5,7 +5,7 @@ Verifies the presence and correctness of critical HTTP security headers.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -82,6 +82,8 @@ def test_headers(
     url: str,
     cookie: str | None = None,
     timeout: float = 10.0,
+    quick: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Check the target URL for missing security headers.
 
@@ -104,7 +106,11 @@ def test_headers(
     resp_headers = {k.lower(): v for k, v in resp.headers.items()}
     path = urlparse(url).path or "/"
 
-    for hdr_name, title, severity, score, vector, remediation in _HEADER_CHECKS:
+    checks = _HEADER_CHECKS[:4] if quick else _HEADER_CHECKS
+    for hdr_name, title, severity, score, vector, remediation in checks:
+        if should_stop and should_stop():
+            log.info("[Headers] Cancelled while checking %s", url)
+            break
         if hdr_name.lower() not in resp_headers:
             findings.append({
                 "title": f"{title} on {path}",
@@ -121,20 +127,21 @@ def test_headers(
             log.info("[Headers] Missing: %s on %s", hdr_name, url)
 
     # Additional: check for Server header leaking version info
-    server = resp_headers.get("server", "")
-    if server and any(c.isdigit() for c in server):
-        findings.append({
-            "title": f"Server Version Disclosure on {path}",
-            "severity": "Low",
-            "cvss_score": 2.0,
-            "cvss_vector": "AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N",
-            "affected_url": url,
-            "parameter": "N/A",
-            "payload": "N/A",
-            "evidence": f"Server header: {server}",
-            "remediation": "Remove or obfuscate the Server header to avoid leaking version info.",
-            "owasp_category": "A02:2025 - Security Misconfiguration",
-        })
+    if not quick and not (should_stop and should_stop()):
+        server = resp_headers.get("server", "")
+        if server and any(c.isdigit() for c in server):
+            findings.append({
+                "title": f"Server Version Disclosure on {path}",
+                "severity": "Low",
+                "cvss_score": 2.0,
+                "cvss_vector": "AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N",
+                "affected_url": url,
+                "parameter": "N/A",
+                "payload": "N/A",
+                "evidence": f"Server header: {server}",
+                "remediation": "Remove or obfuscate the Server header to avoid leaking version info.",
+                "owasp_category": "A02:2025 - Security Misconfiguration",
+            })
 
     log.info("Security headers scan complete — %d findings on %s", len(findings), url)
     return findings

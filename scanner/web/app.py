@@ -11,6 +11,7 @@ Opens at http://127.0.0.1:8000
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -20,19 +21,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-
-# ── Server-side Gemini API keys (auto-failover on rate limits) ────
-_GEMINI_API_KEYS = [
-    "AIzaSyCM5FrrJrIOatrHTpjQ4pd5rTjo64jWWqg",
-    "AIzaSyC6Q2o0vgTT2Y8HtL9BhVfIQg6BfEV5CWY",
-    "AIzaSyCMrL8CrHab6aow4mKX0pO5-VPT3ozLi5U",
-    "AIzaSyDSQZJTuvIYMifS-W62rTxjmjRXmWiif5w",
-]
 
 # Ensure scanner package is importable
 _WEB_DIR = Path(__file__).resolve().parent
@@ -41,18 +35,27 @@ _PROJECT_DIR = _SCANNER_DIR.parent
 if str(_PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(_PROJECT_DIR))
 
+load_dotenv(_PROJECT_DIR / ".env")
+
 from scanner.utils.logger import setup_logger, get_logger
 from scanner.utils.report_exporter import export_json, _build_summary, OWASP_2025
 from scanner.utils.mitre_mapping import (
     MITRE_TECHNIQUES, build_mitre_breakdown, build_attack_paths,
     compute_matrix_coverage, get_all_tactics, build_threat_narrative,
 )
-from scanner.utils.ai_engine import ai_threat_analysis, ai_remediation, ai_executive_summary, ai_mitre_explain
+from scanner.utils.ai_engine import (
+    ai_threat_analysis,
+    ai_remediation,
+    ai_executive_summary,
+    ai_mitre_explain,
+    load_gemini_api_keys,
+)
 from scanner.utils.pdf_report import generate_pdf, generate_docx
 from scanner.core.recon import run_recon
 from scanner.core.port_scanner import scan_ports
 from scanner.core.fingerprint import run_fingerprint
-from scanner.core.crawler import crawl
+from scanner.core.crawler import CrawlResult, crawl
+from scanner.core.dependency_check import check_dependencies
 from scanner.core.scorer import enrich_findings
 from scanner.modules.sqli import test_sqli
 from scanner.modules.xss import test_xss
@@ -60,6 +63,23 @@ from scanner.modules.headers import test_headers
 from scanner.modules.ssrf import test_ssrf
 from scanner.modules.idor import test_idor
 from scanner.modules.open_redirect import test_open_redirect
+from scanner.modules.command_injection import test_command_injection
+from scanner.modules.xxe import test_xxe
+from scanner.modules.lfi import test_lfi
+from scanner.modules.sensitive_files import test_sensitive_files
+from scanner.modules.nosqli import test_nosqli
+from scanner.modules.ssti import test_ssti
+from scanner.modules.graphql_abuse import test_graphql_abuse
+from scanner.modules.jwt_checks import test_jwt_checks
+from scanner.modules.host_header import test_host_header_injection
+from scanner.modules.cors_misconfig import test_cors_misconfig
+from scanner.modules.hpp import test_hpp
+from scanner.modules.crlf_injection import test_crlf_injection
+from scanner.modules.request_smuggling import test_request_smuggling
+from scanner.modules.mass_assignment import test_mass_assignment_bola
+from scanner.modules.insecure_deserialization import test_insecure_deserialization
+from scanner.modules.prototype_pollution import test_prototype_pollution
+from scanner.modules.csv_formula_injection import test_csv_formula_injection
 
 setup_logger(log_dir=os.environ.get("PENTAVAULT_LOGS_DIR", "logs"))
 log = get_logger("web")
@@ -124,6 +144,152 @@ def _save_history() -> None:
 scans: dict[str, dict[str, Any]] = _load_history()
 
 
+def _current_elapsed(scan: dict[str, Any]) -> float:
+    started = datetime.fromisoformat(scan["started_at"])
+    if scan.get("status") in ("completed", "failed", "cancelled") and scan.get("completed_at"):
+        ended = datetime.fromisoformat(scan["completed_at"])
+        return round((ended - started).total_seconds(), 1)
+    return round((datetime.now() - started).total_seconds(), 1)
+
+
+def _finalize_scan(
+    scan: dict[str, Any],
+    status: str,
+    current_stage: str,
+    *,
+    error: str | None = None,
+) -> None:
+    scan["status"] = status
+    scan["current_stage"] = current_stage
+    scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
+    scan["elapsed"] = _current_elapsed(scan)
+    if error is not None:
+        scan["error"] = error
+    _save_history()
+
+
+def _ai_error_detail(code: str, message: str, retryable: bool) -> dict[str, Any]:
+    return {"code": code, "message": message, "retryable": retryable}
+
+
+def _raise_ai_config_error() -> None:
+    raise HTTPException(
+        status_code=400,
+        detail=_ai_error_detail(
+            "AI_CONFIG_MISSING",
+            "AI service is not configured. Add API key settings in your environment and retry.",
+            False,
+        ),
+    )
+
+
+def _raise_ai_upstream_error(exc: Exception) -> None:
+    log.error("AI upstream request failed: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=502,
+        detail=_ai_error_detail(
+            "AI_UPSTREAM_UNAVAILABLE",
+            "AI service is temporarily unavailable. Please retry in a moment.",
+            True,
+        ),
+    )
+
+
+def _raise_ai_internal_error(exc: Exception) -> None:
+    log.error("AI internal error: %s", exc, exc_info=True)
+    raise HTTPException(
+        status_code=500,
+        detail=_ai_error_detail(
+            "AI_INTERNAL_ERROR",
+            "AI request could not be completed due to an internal error.",
+            True,
+        ),
+    )
+
+
+def _raise_ai_endpoint_error(exc: Exception) -> None:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict) and {"code", "message", "retryable"}.issubset(detail.keys()):
+            raise exc
+        if exc.status_code == 400:
+            _raise_ai_config_error()
+        if exc.status_code in (502, 503, 504):
+            _raise_ai_upstream_error(exc)
+        _raise_ai_internal_error(exc)
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        _raise_ai_upstream_error(exc)
+    _raise_ai_upstream_error(exc)
+
+
+def _require_gemini_api_keys() -> list[str]:
+    keys = load_gemini_api_keys()
+    if not keys:
+        _raise_ai_config_error()
+    return keys
+
+
+def _ai_findings_signature(findings: list[dict[str, Any]]) -> str:
+    payload = []
+    for finding in findings:
+        payload.append({
+            "type": finding.get("type"),
+            "module": finding.get("module"),
+            "severity": finding.get("severity"),
+            "parameter": finding.get("parameter", finding.get("param")),
+            "detail": finding.get("detail"),
+            "payload": finding.get("payload"),
+            "mitre_attack": finding.get("mitre_attack", []),
+            "owasp_category": finding.get("owasp_category"),
+            "cvss_score": finding.get("cvss_score"),
+        })
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _ai_cache_key(name: str, payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"v1:{name}:{digest}"
+
+
+def _ai_cache_get(scan: dict[str, Any], key: str) -> str | None:
+    cache = scan.get("_ai_cache")
+    if not isinstance(cache, dict):
+        return None
+    value = cache.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _ai_cache_set(scan: dict[str, Any], key: str, value: str) -> None:
+    cache = scan.get("_ai_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        scan["_ai_cache"] = cache
+    cache[key] = value
+
+
+def _mitre_cache_key(scan_id: str, findings: list[dict[str, Any]]) -> str:
+    canonical = _ai_findings_signature(findings)
+    return _ai_cache_key("scan_mitre", {"scan_id": scan_id, "findings_sig": canonical})
+
+
+def _mitre_cache_get(scan: dict[str, Any], key: str) -> dict[str, Any] | None:
+    cache = scan.get("_mitre_cache")
+    if not isinstance(cache, dict):
+        return None
+    value = cache.get(key)
+    return value if isinstance(value, dict) else None
+
+
+def _mitre_cache_set(scan: dict[str, Any], key: str, value: dict[str, Any]) -> None:
+    cache = scan.get("_mitre_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        scan["_mitre_cache"] = cache
+    cache[key] = value
+
+
 # ── Pydantic models ────────────────────────────────────────────────
 class ScanRequest(BaseModel):
     target: str
@@ -131,7 +297,9 @@ class ScanRequest(BaseModel):
     cookie: str | None = None
     threads: int = Field(default=5, ge=1, le=10)
     timeout: float = Field(default=10.0, ge=1.0, le=60.0)
+    request_delay: float = Field(default=0.0, ge=0.0, le=2.0)
     use_browser: bool = False
+    crawl_mode: str = Field(default="auto", pattern="^(auto|httpx|selenium|hybrid)$")
 
 
 class ScanStatus(BaseModel):
@@ -157,10 +325,52 @@ def _normalise_target(raw: str) -> tuple[str, str, bool]:
     return f"http://{raw.rstrip('/')}", host, False
 
 
+def _merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlResult:
+    merged = CrawlResult()
+    merged.endpoints = list(dict.fromkeys(primary.endpoints + fallback.endpoints))
+    merged.forms = primary.forms + fallback.forms
+    merged.parameters = set(primary.parameters) | set(fallback.parameters)
+    merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
+    merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
+    return merged
+
+
+def _ensure_scan_runtime_metadata(scan: dict[str, Any]) -> None:
+    runtime = scan.get("runtime_config")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        scan["runtime_config"] = runtime
+
+    threads = scan.get("threads")
+    timeout = scan.get("timeout")
+    request_delay = scan.get("request_delay")
+
+    runtime.setdefault("mode", scan.get("mode", "quick"))
+    runtime.setdefault("threads", threads if isinstance(threads, int) else 0)
+    runtime.setdefault("timeout_seconds", float(timeout) if isinstance(timeout, (int, float)) else 0.0)
+    runtime.setdefault("request_delay_seconds", float(request_delay) if isinstance(request_delay, (int, float)) else 0.0)
+    runtime.setdefault("use_browser", bool(scan.get("use_browser", False)))
+    runtime.setdefault("crawl_mode", scan.get("crawl_mode", "auto"))
+
+    execution = scan.get("execution_metadata")
+    if not isinstance(execution, dict):
+        execution = {}
+        scan["execution_metadata"] = execution
+
+    execution.setdefault("http_parallelization", "threadpool")
+    execution.setdefault("http_module_workers", runtime.get("threads", 0))
+    execution.setdefault("resolved_crawl_mode", runtime.get("crawl_mode", "auto"))
+    execution.setdefault("browser_module_execution", "disabled")
+    execution.setdefault("browser_module_timeout_seconds", 0)
+    execution.setdefault("http_module_count", 0)
+    execution.setdefault("browser_module_count", 0)
+
+
 # ── Background scan runner ─────────────────────────────────────────
 def _run_scan(scan_id: str, req: ScanRequest) -> None:
     """Execute the full scan pipeline (runs in a background thread)."""
     scan = scans[scan_id]
+    _ensure_scan_runtime_metadata(scan)
     url, hostname, is_url = _normalise_target(req.target)
     scan["url"] = url
 
@@ -171,29 +381,39 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             try:
                 _hx.get(url, timeout=15, verify=False, follow_redirects=True)
             except Exception as exc:
-                scan["status"] = "failed"
-                scan["error"] = f"Target unreachable: {exc}"
-                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-                _save_history()
+                _finalize_scan(scan, "failed", f"Error: Target unreachable: {exc}", error=f"Target unreachable: {exc}")
                 log.error("[%s] Target unreachable: %s", scan_id[:8], exc)
                 return
 
         # ── Stage 1: Target Input ───────────────────────────────
         scan["current_stage"] = "Target Input"
         scan["progress"] = 5
-        log.info("[%s] Target: %s | Mode: %s | Threads: %d | Timeout: %.1fs | Browser: %s | Cookie: %s", 
-                 scan_id[:8], url, req.mode, req.threads, req.timeout, req.use_browser, bool(req.cookie))
+        log.info("[%s] Target: %s | Mode: %s | Threads: %d | Timeout: %.1fs | Delay: %.2fs | Browser: %s | Crawl mode: %s | Cookie: %s",
+                 scan_id[:8], url, req.mode, req.threads, req.timeout, req.request_delay, req.use_browser, req.crawl_mode, bool(req.cookie))
+
+        dep = check_dependencies(mode=req.mode, use_browser=req.use_browser)
+        for warning in dep["warnings"]:
+            log.warning("[%s] Preflight: %s", scan_id[:8], warning)
+        if not dep["ok"]:
+            _finalize_scan(scan, "failed", "Dependency check failed", error="; ".join(dep["errors"]))
+            return
+
+        scan["dependency_warnings"] = dep["warnings"]
+        scan["dependency_capabilities"] = dep["capabilities"]
 
         recon_data: dict[str, Any] = {}
         fingerprint_data: dict[str, Any] = {}
 
         # ── Stage 2: Recon ──────────────────────────────────────
+        scan["runtime_config"]["mode"] = req.mode
+        scan["runtime_config"]["threads"] = req.threads
+        scan["runtime_config"]["timeout_seconds"] = req.timeout
+        scan["runtime_config"]["request_delay_seconds"] = req.request_delay
+        scan["execution_metadata"]["http_module_workers"] = req.threads
+
         if req.mode in ("full", "network-only"):
             if scan.get("_cancel"):
-                scan["status"] = "cancelled"
-                scan["current_stage"] = "Cancelled by user"
-                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-                _save_history()
+                _finalize_scan(scan, "cancelled", "Cancelled by user")
                 return
             scan["current_stage"] = "Reconnaissance"
             scan["progress"] = 10
@@ -210,10 +430,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         # ── Stage 3: Fingerprinting ─────────────────────────────
         if req.mode in ("full", "web-only", "quick") and is_url:
             if scan.get("_cancel"):
-                scan["status"] = "cancelled"
-                scan["current_stage"] = "Cancelled by user"
-                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-                _save_history()
+                _finalize_scan(scan, "cancelled", "Cancelled by user")
                 return
             scan["current_stage"] = "Fingerprinting"
             scan["progress"] = 20
@@ -231,38 +448,82 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         if req.mode in ("full", "web-only", "quick") and is_url:
             if scan.get("_cancel"):
-                scan["status"] = "cancelled"
-                scan["current_stage"] = "Cancelled by user"
-                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-                _save_history()
+                _finalize_scan(scan, "cancelled", "Cancelled by user")
                 return
             scan["current_stage"] = "Web Crawling"
             scan["progress"] = 30
             t0 = time.monotonic()
 
             use_browser = scan.get("use_browser", req.use_browser)
-            if use_browser:
+            crawl_mode = (req.crawl_mode or "auto")
+            if crawl_mode == "auto":
+                crawl_mode = "selenium" if use_browser else "httpx"
+            scan["runtime_config"]["use_browser"] = bool(use_browser)
+            scan["runtime_config"]["crawl_mode"] = crawl_mode
+            scan["execution_metadata"]["resolved_crawl_mode"] = crawl_mode
+
+            max_depth = 2 if req.mode == "quick" else 3
+            max_pages = 50 if req.mode == "quick" else 200
+            should_stop = lambda: bool(scan.get("_cancel"))
+
+            if crawl_mode == "selenium":
                 from scanner.core.selenium_crawler import selenium_crawl
+
                 crawl_result = selenium_crawl(
                     url,
-                    max_depth=2 if req.mode == "quick" else 3,
-                    max_pages=50 if req.mode == "quick" else 200,
+                    max_depth=max_depth,
+                    max_pages=max_pages,
                     cookie=req.cookie,
                     headless=True,
+                    should_stop=should_stop,
+                    request_delay=req.request_delay,
                 )
-            else:
-                crawl_result = crawl(
+                crawler_label = "Selenium Crawler"
+            elif crawl_mode == "hybrid":
+                from scanner.core.selenium_crawler import selenium_crawl
+
+                primary = crawl(
                     url,
-                    max_depth=2 if req.mode == "quick" else 3,
-                    max_pages=50 if req.mode == "quick" else 200,
+                    max_depth=max_depth,
+                    max_pages=max_pages,
                     cookie=req.cookie,
                     timeout=req.timeout,
                     respect_robots=(req.mode == "quick"),
+                    should_stop=should_stop,
+                    request_delay=req.request_delay,
                 )
+                needs_fallback = len(primary.endpoints) < 5 or len(primary.forms) < 1
+                if needs_fallback and not should_stop():
+                    fallback = selenium_crawl(
+                        url,
+                        max_depth=max_depth,
+                        max_pages=max_pages,
+                        cookie=req.cookie,
+                        headless=True,
+                        should_stop=should_stop,
+                        request_delay=req.request_delay,
+                    )
+                    crawl_result = _merge_crawl_results(primary, fallback)
+                    crawler_label = "Hybrid Crawler"
+                else:
+                    crawl_result = primary
+                    crawler_label = "Crawler"
+            else:
+                crawl_result = crawl(
+                    url,
+                    max_depth=max_depth,
+                    max_pages=max_pages,
+                    cookie=req.cookie,
+                    timeout=req.timeout,
+                    respect_robots=(req.mode == "quick"),
+                    should_stop=should_stop,
+                    request_delay=req.request_delay,
+                )
+                crawler_label = "Crawler"
+
             endpoints = crawl_result.endpoints
             forms = crawl_result.forms
             crawl_summary = crawl_result.summary()
-            crawler_label = "Selenium Crawler" if use_browser else "Crawler"
             scan["stages"].append({"name": crawler_label, "time": round(time.monotonic() - t0, 1)})
             scan["crawl_summary"] = crawl_summary
 
@@ -270,10 +531,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         all_findings: list[dict[str, Any]] = []
         if req.mode != "network-only" and endpoints:
             if scan.get("_cancel"):
-                scan["status"] = "cancelled"
-                scan["current_stage"] = "Cancelled by user"
-                scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-                _save_history()
+                _finalize_scan(scan, "cancelled", "Cancelled by user")
                 return
             scan["current_stage"] = "Vulnerability Testing"
             scan["progress"] = 50
@@ -285,21 +543,40 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
             # Re-read mutable Selenium flag (may have been toggled mid-scan)
             use_browser_vuln = scan.get("use_browser", req.use_browser)
+            scan["runtime_config"]["use_browser"] = bool(use_browser_vuln)
 
+            should_stop = lambda: bool(scan.get("_cancel"))
             modules = [
-                ("SQLi", lambda: test_sqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
-                ("XSS", lambda: test_xss(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
-                ("Headers", lambda: test_headers(url, cookie=req.cookie, timeout=req.timeout)),
-                ("SSRF", lambda: test_ssrf(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
-                ("IDOR", lambda: test_idor(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
-                ("Open Redirect", lambda: test_open_redirect(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick)),
+                ("SQLi", lambda: test_sqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("XSS", lambda: test_xss(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Headers", lambda: test_headers(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("SSRF", lambda: test_ssrf(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("IDOR", lambda: test_idor(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Open Redirect", lambda: test_open_redirect(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Command Injection", lambda: test_command_injection(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("XXE", lambda: test_xxe(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("LFI", lambda: test_lfi(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Sensitive Files", lambda: test_sensitive_files(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("NoSQLi", lambda: test_nosqli(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("SSTI", lambda: test_ssti(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("GraphQL Abuse", lambda: test_graphql_abuse(url, endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("JWT Checks", lambda: test_jwt_checks(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Host Header Injection", lambda: test_host_header_injection(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("CORS Misconfiguration", lambda: test_cors_misconfig(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("HTTP Parameter Pollution", lambda: test_hpp(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("CRLF Injection", lambda: test_crlf_injection(endpoints, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Request Smuggling", lambda: test_request_smuggling(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Mass Assignment/BOLA", lambda: test_mass_assignment_bola(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Insecure Deserialization", lambda: test_insecure_deserialization(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("Prototype Pollution", lambda: test_prototype_pollution(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("CSV/Formula Injection", lambda: test_csv_formula_injection(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
             ]
 
             if use_browser_vuln:
                 from scanner.modules.sqli_selenium import test_sqli_selenium
                 from scanner.modules.xss_selenium import test_xss_selenium
-                modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence"))
-                modules[1] = ("XSS (Browser)", lambda: test_xss_selenium(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence"))
+                modules[0] = ("SQLi (Browser)", lambda: test_sqli_selenium(endpoints, forms, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence", should_stop=should_stop))
+                modules[1] = ("XSS (Browser)", lambda: test_xss_selenium(endpoints, forms, waf_detected=waf_detected, cookie=req.cookie, headless=True, quick=is_quick, evidence_dir="evidence", should_stop=should_stop))
                 log.info("[%s] Using Selenium browser for SQLi and XSS tests (module timeout: %ds)", scan_id[:8], 120 if req.mode == "quick" else 180)
             else:
                 log.info("[%s] Using standard HTTP modules for all vulnerability tests", scan_id[:8])
@@ -308,6 +585,11 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
             total_modules = len(modules)
             completed = 0
+            browser_module_count = 2 if use_browser_vuln else 0
+            http_module_count = total_modules - browser_module_count
+            scan["execution_metadata"]["http_module_count"] = http_module_count
+            scan["execution_metadata"]["browser_module_count"] = browser_module_count
+            scan["execution_metadata"]["http_module_workers"] = req.threads
 
             def _run_module_with_timeout(name, fn, timeout_sec=300):
                 """Run a module function with a hard timeout.
@@ -333,17 +615,26 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
                 if t.is_alive():
                     log.warning("[%s] %s timed out after %ds — killing browser", scan_id[:8], name, timeout_sec)
-                    # Kill any leftover Chrome processes spawned by Selenium
+                    # Kill leftover browser processes on Windows when available.
                     try:
                         import subprocess
-                        subprocess.run(
-                            ["taskkill", "/F", "/IM", "chromedriver.exe", "/T"],
-                            capture_output=True, timeout=10,
-                        )
-                        subprocess.run(
-                            ["taskkill", "/F", "/IM", "chrome.exe", "/T"],
-                            capture_output=True, timeout=10,
-                        )
+                        if os.name == "nt":
+                            subprocess.run(
+                                ["taskkill", "/F", "/IM", "chromedriver.exe", "/T"],
+                                capture_output=True, timeout=10,
+                            )
+                            subprocess.run(
+                                ["taskkill", "/F", "/IM", "chrome.exe", "/T"],
+                                capture_output=True, timeout=10,
+                            )
+                            subprocess.run(
+                                ["taskkill", "/F", "/IM", "msedgedriver.exe", "/T"],
+                                capture_output=True, timeout=10,
+                            )
+                            subprocess.run(
+                                ["taskkill", "/F", "/IM", "msedge.exe", "/T"],
+                                capture_output=True, timeout=10,
+                            )
                     except Exception:
                         pass
                     return []
@@ -356,6 +647,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             if use_browser_vuln:
                 browser_modules = modules[:2]
                 http_modules = modules[2:]
+                scan["execution_metadata"]["browser_module_execution"] = "sequential"
 
                 log.info("[%s] Selenium ON: running %d HTTP modules with %d threads, then %d browser modules sequentially",
                          scan_id[:8], len(http_modules), req.threads, len(browser_modules))
@@ -378,6 +670,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
                 # Browser modules: run sequentially with per-module progress + timeout
                 browser_timeout = 120 if req.mode == "quick" else 180
+                scan["execution_metadata"]["browser_module_timeout_seconds"] = browser_timeout
                 for name, fn in browser_modules:
                     if scan.get("_cancel"):
                         break
@@ -394,6 +687,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                         log.error("[%s] %s failed: %s", scan_id[:8], name, exc)
                         completed += 1
             else:
+                scan["execution_metadata"]["browser_module_execution"] = "disabled"
+                scan["execution_metadata"]["browser_module_timeout_seconds"] = 0
                 log.info("[%s] Selenium OFF: running all %d modules with %d threads",
                          scan_id[:8], len(modules), req.threads)
                 with ThreadPoolExecutor(max_workers=req.threads) as pool:
@@ -416,10 +711,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         # ── Stage 6: CVSS Scoring ───────────────────────────────
         if scan.get("_cancel"):
-            scan["status"] = "cancelled"
-            scan["current_stage"] = "Cancelled by user"
-            scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-            _save_history()
+            _finalize_scan(scan, "cancelled", "Cancelled by user")
             return
         scan["current_stage"] = "CVSS Scoring"
         scan["progress"] = 85
@@ -446,20 +738,14 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         scan["findings"] = all_findings
         scan["summary"] = _build_summary(all_findings)
         scan["report_path"] = output_path
-        scan["status"] = "completed"
         scan["progress"] = 100
-        scan["current_stage"] = "Complete"
-        scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
         scan["findings_count"] = len(all_findings)
         log.info("[%s] Scan complete — %d findings", scan_id[:8], len(all_findings))
-        _save_history()
+        _finalize_scan(scan, "completed", "Complete")
 
     except Exception as exc:
-        scan["status"] = "failed"
-        scan["current_stage"] = f"Error: {exc}"
-        scan["error"] = str(exc)
+        _finalize_scan(scan, "failed", f"Error: {exc}", error=str(exc))
         log.error("[%s] Scan failed: %s", scan_id[:8], exc, exc_info=True)
-        _save_history()
 
 
 # ── API Endpoints ──────────────────────────────────────────────────
@@ -480,6 +766,12 @@ async def start_scan(req: ScanRequest):
             detail="Live scanning is unavailable on the Vercel deployment. "
                    "Run PentaVault locally for active scanning.",
         )
+    preflight = check_dependencies(mode=req.mode, use_browser=req.use_browser)
+    if not preflight["ok"]:
+        raise HTTPException(status_code=400, detail={"errors": preflight["errors"], "warnings": preflight["warnings"]})
+
+    req.request_delay = min(max(req.request_delay, 0.0), 2.0)
+
     scan_id = str(uuid.uuid4())
     scans[scan_id] = {
         "scan_id": scan_id,
@@ -487,7 +779,11 @@ async def start_scan(req: ScanRequest):
         "target": req.target,
         "url": "",
         "mode": req.mode,
+        "threads": req.threads,
+        "timeout": req.timeout,
         "use_browser": req.use_browser,
+        "crawl_mode": req.crawl_mode,
+        "request_delay": req.request_delay,
         "progress": 0,
         "current_stage": "Initialising",
         "stages": [],
@@ -503,6 +799,25 @@ async def start_scan(req: ScanRequest):
         "recon_data": None,
         "report_path": None,
         "error": None,
+        "runtime_config": {
+            "mode": req.mode,
+            "threads": req.threads,
+            "timeout_seconds": req.timeout,
+            "request_delay_seconds": req.request_delay,
+            "use_browser": req.use_browser,
+            "crawl_mode": req.crawl_mode,
+        },
+        "execution_metadata": {
+            "http_parallelization": "threadpool",
+            "http_module_workers": req.threads,
+            "resolved_crawl_mode": req.crawl_mode,
+            "browser_module_execution": "disabled",
+            "browser_module_timeout_seconds": 0,
+            "http_module_count": 0,
+            "browser_module_count": 0,
+        },
+        "dependency_warnings": preflight["warnings"],
+        "dependency_capabilities": preflight["capabilities"],
     }
 
     # Run scan in background thread
@@ -520,14 +835,8 @@ async def get_scan_status(scan_id: str):
         raise HTTPException(status_code=404, detail="Scan not found")
 
     scan = scans[scan_id]
-    started = datetime.fromisoformat(scan["started_at"])
-    if scan["status"] in ("completed", "failed", "cancelled") and scan.get("completed_at"):
-        ended = datetime.fromisoformat(scan["completed_at"])
-        elapsed = (ended - started).total_seconds()
-    else:
-        elapsed = (datetime.now() - started).total_seconds()
-    scan["elapsed"] = round(elapsed, 1)
-
+    _ensure_scan_runtime_metadata(scan)
+    scan["elapsed"] = _current_elapsed(scan)
     return scan
 
 
@@ -573,8 +882,10 @@ async def update_scan_config(scan_id: str, body: dict):
     if scan_id not in scans:
         raise HTTPException(status_code=404, detail="Scan not found")
     scan = scans[scan_id]
+    _ensure_scan_runtime_metadata(scan)
     if "use_browser" in body:
         scan["use_browser"] = bool(body["use_browser"])
+        scan["runtime_config"]["use_browser"] = scan["use_browser"]
         log.info("[%s] Selenium toggled to %s mid-scan", scan_id[:8], scan["use_browser"])
     return {"updated": True}
 
@@ -587,13 +898,10 @@ async def cancel_scan(scan_id: str):
     scan = scans[scan_id]
     if scan["status"] != "running":
         return {"cancelled": False, "reason": "Scan is not running"}
-    # Signal the background thread first to avoid race condition
+    # Signal the background thread; terminal state is finalized by worker.
     scan["_cancel"] = True
-    scan["status"] = "cancelled"
-    scan["current_stage"] = "Cancelled by user"
-    scan["completed_at"] = datetime.now().isoformat(timespec="seconds")
-    log.info("[%s] Scan cancelled by user", scan_id[:8])
-    _save_history()
+    scan["current_stage"] = "Cancellation requested"
+    log.info("[%s] Scan cancellation requested by user", scan_id[:8])
     return {"cancelled": True}
 
 
@@ -620,19 +928,29 @@ async def get_mitre_breakdown(scan_id: str):
     """Return the MITRE ATT&CK breakdown for a scan."""
     if scan_id not in scans:
         raise HTTPException(status_code=404, detail="Scan not found")
-    findings = scans[scan_id].get("findings", [])
-    target = scans[scan_id].get("target", "")
+    scan = scans[scan_id]
+    findings = scan.get("findings", [])
+    target = scan.get("target", "")
+
+    cache_key = _mitre_cache_key(scan_id, findings)
+    cached = _mitre_cache_get(scan, cache_key)
+    if cached is not None:
+        return cached
+
     breakdown = build_mitre_breakdown(findings)
     attack_paths = build_attack_paths(findings)
     coverage = compute_matrix_coverage(findings)
     narrative = build_threat_narrative(target, findings, breakdown, coverage)
-    return {
+
+    payload = {
         "target": target,
         "threat_narrative": narrative,
         "mitre_breakdown": breakdown,
         "attack_paths": attack_paths,
         "matrix_coverage": coverage,
     }
+    _mitre_cache_set(scan, cache_key, payload)
+    return payload
 
 
 @app.get("/api/evidence/{filename}")
@@ -670,12 +988,22 @@ async def ai_analyze(req: AIRequest):
     findings = scan.get("findings", [])
     if not findings:
         raise HTTPException(status_code=400, detail="No findings to analyse")
+
+    findings_sig = _ai_findings_signature(findings)
+    cache_key = _ai_cache_key("analyze", {"scan_id": req.scan_id, "findings_sig": findings_sig})
+    cached = _ai_cache_get(scan, cache_key)
+    if cached is not None:
+        return {"analysis": cached}
+
     breakdown = build_mitre_breakdown(findings)
     coverage = compute_matrix_coverage(findings)
+    gemini_api_keys = _require_gemini_api_keys()
     try:
-        result = ai_threat_analysis(_GEMINI_API_KEYS, scan, findings, breakdown, coverage)
+        result = ai_threat_analysis(gemini_api_keys, scan, findings, breakdown, coverage)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+        _raise_ai_endpoint_error(exc)
+
+    _ai_cache_set(scan, cache_key, result)
     return {"analysis": result}
 
 
@@ -689,10 +1017,29 @@ async def ai_remediate(req: AIRequest):
     idx = req.finding_index
     if idx is None or idx < 0 or idx >= len(findings):
         raise HTTPException(status_code=400, detail="Invalid finding index")
+
+    finding = findings[idx]
+    findings_sig = _ai_findings_signature(findings)
+    cache_key = _ai_cache_key(
+        "remediate",
+        {
+            "scan_id": req.scan_id,
+            "finding_index": idx,
+            "finding": finding,
+            "findings_sig": findings_sig,
+        },
+    )
+    cached = _ai_cache_get(scan, cache_key)
+    if cached is not None:
+        return {"remediation": cached}
+
+    gemini_api_keys = _require_gemini_api_keys()
     try:
-        result = ai_remediation(_GEMINI_API_KEYS, findings[idx], scan)
+        result = ai_remediation(gemini_api_keys, finding, scan)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+        _raise_ai_endpoint_error(exc)
+
+    _ai_cache_set(scan, cache_key, result)
     return {"remediation": result}
 
 
@@ -703,10 +1050,21 @@ async def ai_exec_summary(req: AIRequest):
         raise HTTPException(status_code=404, detail="Scan not found")
     scan = scans[req.scan_id]
     findings = scan.get("findings", [])
+
+    findings_sig = _ai_findings_signature(findings)
+    cache_key = _ai_cache_key("executive_summary", {"scan_id": req.scan_id, "findings_sig": findings_sig})
+    cached = _ai_cache_get(scan, cache_key)
+    if cached is not None:
+        scan["_ai_executive_summary"] = cached
+        return {"summary": cached}
+
+    gemini_api_keys = _require_gemini_api_keys()
     try:
-        result = ai_executive_summary(_GEMINI_API_KEYS, scan, findings)
+        result = ai_executive_summary(gemini_api_keys, scan, findings)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+        _raise_ai_endpoint_error(exc)
+
+    _ai_cache_set(scan, cache_key, result)
     scan["_ai_executive_summary"] = result
     return {"summary": result}
 
@@ -718,9 +1076,27 @@ async def ai_mitre_explain_endpoint(req: MitreExplainRequest):
         raise HTTPException(status_code=404, detail="Scan not found")
     scan = scans[req.scan_id]
     findings = scan.get("findings", [])
+
+    findings_sig = _ai_findings_signature(findings)
+    cache_key = _ai_cache_key(
+        "mitre_explain",
+        {
+            "scan_id": req.scan_id,
+            "technique_id": req.technique_id,
+            "technique_name": req.technique_name,
+            "tactic": req.tactic,
+            "question": (req.question or "").strip(),
+            "findings_sig": findings_sig,
+        },
+    )
+    cached = _ai_cache_get(scan, cache_key)
+    if cached is not None:
+        return {"explanation": cached}
+
+    gemini_api_keys = _require_gemini_api_keys()
     try:
         result = ai_mitre_explain(
-            _GEMINI_API_KEYS,
+            gemini_api_keys,
             req.technique_id,
             req.technique_name,
             req.tactic,
@@ -729,7 +1105,9 @@ async def ai_mitre_explain_endpoint(req: MitreExplainRequest):
             req.question or None,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"AI request failed: {exc}")
+        _raise_ai_endpoint_error(exc)
+
+    _ai_cache_set(scan, cache_key, result)
     return {"explanation": result}
 
 
@@ -775,6 +1153,9 @@ async def download_pdf(scan_id: str):
 @app.get("/api/scan/{scan_id}/report/docx")
 async def download_docx(scan_id: str):
     """Download professional DOCX report."""
+    preflight = check_dependencies(mode="quick", use_browser=False, need_docx=True)
+    if not preflight["ok"]:
+        raise HTTPException(status_code=400, detail={"errors": preflight["errors"], "warnings": preflight["warnings"]})
     if scan_id not in scans:
         raise HTTPException(status_code=404, detail="Scan not found")
     scan = scans[scan_id]
@@ -810,8 +1191,17 @@ async def download_docx(scan_id: str):
 # ── Entry point ────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    print("\n  ╔══════════════════════════════════════════════════╗")
-    print("  ║  PentaVault — Web Dashboard                      ║")
-    print("  ║  Open: http://127.0.0.1:8000                     ║")
-    print("  ╚══════════════════════════════════════════════════╝\n")
+
+    banner = (
+        "\n  ╔══════════════════════════════════════════════════╗\n"
+        "  ║  PentaVault — Web Dashboard                      ║\n"
+        "  ║  Open: http://127.0.0.1:8000                     ║\n"
+        "  ╚══════════════════════════════════════════════════╝\n"
+    )
+    try:
+        print(banner)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        print(banner.encode(encoding, errors="replace").decode(encoding, errors="replace"))
+
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

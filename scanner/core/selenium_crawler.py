@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urljoin, urlparse, parse_qs
 
 from selenium import webdriver
@@ -122,6 +122,8 @@ def selenium_crawl(
     cookie: str | None = None,
     headless: bool = True,
     wait_per_page: float = 0.5,
+    should_stop: Callable[[], bool] | None = None,
+    request_delay: float = 0.0,
 ) -> CrawlResult:
     """Crawl *base_url* using a headless Chrome browser.
 
@@ -142,6 +144,9 @@ def selenium_crawl(
         _intercept_xhr(driver)
 
         while queue and len(visited) < max_pages:
+            if should_stop and should_stop():
+                log.info("Selenium crawl cancelled after %d visited pages", len(visited))
+                break
             url, depth = queue.pop(0)
 
             # Normalise
@@ -160,6 +165,8 @@ def selenium_crawl(
                 result.parameters.add(param)
 
             try:
+                if request_delay > 0:
+                    time.sleep(request_delay)
                 driver.get(normalized)
                 # Wait for JS rendering
                 time.sleep(wait_per_page)

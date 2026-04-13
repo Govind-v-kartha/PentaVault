@@ -17,7 +17,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fpdf import FPDF
+try:
+    from fpdf import FPDF
+    _FPDF_IMPORT_ERROR: Exception | None = None
+except Exception as exc:  # pragma: no cover - environment dependent
+    FPDF = object  # type: ignore[assignment,misc]
+    _FPDF_IMPORT_ERROR = exc
 
 # ── latin-1 safety ──────────────────────────────────────────────
 def _latin1_safe(text: str) -> str:
@@ -453,6 +458,11 @@ def generate_pdf(
     mitre_data: dict[str, Any] | None = None,
     ai_summary: str | None = None,
 ) -> bytes:
+
+    if _FPDF_IMPORT_ERROR is not None:
+        raise RuntimeError(
+            "PDF export dependency missing: install fpdf2 (pip install fpdf2)."
+        ) from _FPDF_IMPORT_ERROR
 
     pdf = PentaVaultPDF(target, orientation="P", unit="mm", format="A4")
     pdf.set_margins(15, 15, 15)
@@ -936,6 +946,9 @@ def generate_docx(
         "ai_summary": ai_summary,
     }
     json_str = json.dumps(payload, default=str)
+
+    if shutil.which("node") is None:
+        raise RuntimeError("DOCX generation failed: Node.js runtime not found in PATH")
 
     result = subprocess.run(
         ["node", str(_JS_SCRIPT)],

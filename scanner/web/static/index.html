@@ -3,277 +3,399 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PentaVault — Dashboard</title>
+  <title>PentaVault — SOC Obsidian</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00e5ff" stroke-width="2">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-      </svg>
-      <h1>PentaVault <span class="ver">v1.1.0</span></h1>
+  <div class="app-shell">
+    <aside class="command-rail" aria-label="Command rail">
+      <div class="rail-brand" aria-hidden="true">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          <path d="M9 12l2 2 4-4"></path>
+        </svg>
+      </div>
+      <nav class="rail-nav" aria-label="Primary panels">
+        <button type="button" class="tab rail-btn active" data-tab="scan" aria-label="New Scan">
+          <span class="rail-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20"></path><path d="M2 12h20"></path></svg>
+          </span>
+          <span class="rail-tip">New Scan</span>
+        </button>
+        <button type="button" class="tab rail-btn" data-tab="history" aria-label="History">
+          <span class="rail-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 8v5l3 3"></path><path d="M3 12a9 9 0 109-9"></path></svg>
+          </span>
+          <span class="rail-tip">History</span>
+        </button>
+        <button type="button" class="tab rail-btn" data-tab="owasp" aria-label="OWASP 2025">
+          <span class="rail-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v16H4z"></path><path d="M4 10h16"></path><path d="M10 4v16"></path></svg>
+          </span>
+          <span class="rail-tip">OWASP 2025</span>
+        </button>
+        <button type="button" class="tab rail-btn" data-tab="mitre" aria-label="MITRE ATT&amp;CK">
+          <span class="rail-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20l6-8 4 3 6-11"></path><circle cx="4" cy="20" r="1.5"></circle><circle cx="10" cy="12" r="1.5"></circle><circle cx="14" cy="15" r="1.5"></circle><circle cx="20" cy="4" r="1.5"></circle></svg>
+          </span>
+          <span class="rail-tip">MITRE ATT&amp;CK</span>
+        </button>
+      </nav>
+      <div class="rail-live" id="railLive">
+        <span class="live-dot" id="railLiveDot"></span>
+      </div>
+    </aside>
+
+    <div class="workspace-shell">
+      <header class="workspace-header">
+        <div class="brand-block">
+          <h1>PentaVault <span class="ver">v1.2.0</span></h1>
+          <p>Autonomous VAPT Command Center · SOC Obsidian</p>
+        </div>
+        <div class="header-meta">
+          <span id="headerModeChip" class="meta-chip">Idle</span>
+          <span id="headerClock" class="meta-chip mono"></span>
+        </div>
+      </header>
+
+      <main class="stage-root">
+        <section id="panel-scan" class="panel active">
+          <div class="launch-layout">
+            <div class="glass-card launch-controls">
+              <h2>The Launch Pad</h2>
+              <form id="scanForm">
+                <div class="form-row">
+                  <label for="target">Target URL / IP</label>
+                  <input type="text" id="target" placeholder="https://example.com" required />
+                </div>
+
+                <div class="form-row">
+                  <label>Scan Mode</label>
+                  <div class="mode-card-grid" id="modeCardGrid">
+                    <button type="button" class="mode-card active" data-mode="quick">
+                      <strong>Quick</strong>
+                      <span>Fast web posture sweep</span>
+                    </button>
+                    <button type="button" class="mode-card" data-mode="full">
+                      <strong>Full</strong>
+                      <span>Complete web + network pass</span>
+                    </button>
+                    <button type="button" class="mode-card" data-mode="web-only">
+                      <strong>Web Only</strong>
+                      <span>Application-layer deep tests</span>
+                    </button>
+                    <button type="button" class="mode-card" data-mode="network-only">
+                      <strong>Network Only</strong>
+                      <span>Recon + service exposure</span>
+                    </button>
+                  </div>
+                  <select id="mode" class="hidden-select" aria-hidden="true" tabindex="-1">
+                    <option value="quick">Quick</option>
+                    <option value="full">Full</option>
+                    <option value="web-only">Web Only</option>
+                    <option value="network-only">Network Only</option>
+                  </select>
+                </div>
+
+                <div class="form-row-group">
+                  <div class="form-row">
+                    <label for="threads">Threads</label>
+                    <input type="number" id="threads" value="5" min="1" max="10" />
+                  </div>
+                  <div class="form-row">
+                    <label for="timeout">Timeout (s)</label>
+                    <input type="number" id="timeout" value="10" min="1" max="60" />
+                  </div>
+                  <div class="form-row">
+                    <label for="requestDelay">Request Delay (s)</label>
+                    <input type="number" id="requestDelay" value="0" min="0" max="2" step="0.1" />
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <label for="cookie">Cookie (optional)</label>
+                  <input type="text" id="cookie" placeholder="session=abc123" />
+                </div>
+
+                <div class="form-row">
+                  <label for="crawlMode">Crawl Mode</label>
+                  <select id="crawlMode">
+                    <option value="auto">Auto</option>
+                    <option value="httpx">HTTP</option>
+                    <option value="selenium">Selenium</option>
+                    <option value="hybrid">Hybrid</option>
+                  </select>
+                </div>
+
+                <div class="form-row toggle-row">
+                  <label class="toggle">
+                    <input type="checkbox" id="useBrowser" />
+                    <span class="slider"></span>
+                  </label>
+                  <span>Use Selenium Browser Engine</span>
+                </div>
+
+                <div class="scan-btn-group">
+                  <button type="submit" class="btn-primary" id="btnStart">Start Scan</button>
+                  <button type="button" class="btn-cancel" id="btnCancel" style="display:none" onclick="cancelActiveScan()">⬢ Abort</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="glass-card launch-visual">
+              <div class="scene-head">
+                <h3>Threat Globe</h3>
+                <span class="mono" id="geoReadout">Awaiting target intelligence...</span>
+              </div>
+              <div id="launchGlobeScene" class="scene-canvas"></div>
+            </div>
+          </div>
+
+          <div class="glass-card mission-control" id="progressCard" style="display:none">
+            <div class="mission-left">
+              <h2>Mission Control</h2>
+              <div class="progress-info">
+                <span id="progressStage">Initialising…</span>
+                <span id="progressPct">0%</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="progressFill" style="width:0%"></div>
+              </div>
+              <div class="progress-meta">
+                <span>Elapsed: <strong id="elapsed">0s</strong></span>
+                <span>Findings: <strong id="findingsCount">0</strong></span>
+              </div>
+              <div id="stageTimeline" class="stage-timeline"></div>
+              <div id="totalTimeDisplay" class="total-time-display" style="display:none"></div>
+
+              <div class="mission-terminal-wrap">
+                <h3>Live Stage Feed</h3>
+                <div id="missionTerminal" class="mission-terminal"></div>
+              </div>
+
+              <div class="stream-wrap">
+                <h3>Live Finding Stream</h3>
+                <div id="findingStream" class="finding-stream"></div>
+              </div>
+            </div>
+            <div class="mission-right">
+              <div id="progress3dScene" class="scene-canvas"></div>
+              <label class="audio-toggle">
+                <input type="checkbox" id="audioCueToggle" />
+                <span>Enable stage checkpoint audio cue</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="glass-card" id="runtimeBehaviorCard" style="display:none">
+            <h2>Runtime Behavior</h2>
+            <p class="card-subtitle">Effective execution settings and module scheduling for this scan.</p>
+            <div id="runtimeBehavior" class="runtime-grid"></div>
+          </div>
+
+          <div id="resultsPanel" style="display:none">
+            <div class="glass-card hero-graph-card">
+              <div class="hero-head">
+                <h2>Attack Path Node Graph</h2>
+                <button type="button" class="btn-sm" id="btnGraphFullscreen">Fullscreen</button>
+              </div>
+              <div id="attackGraphScene" class="scene-canvas xl"></div>
+              <div id="graphHoverLabel" class="graph-hover-label" style="display:none"></div>
+              <div id="attackPaths" class="killchain-timeline"></div>
+            </div>
+
+            <div class="operations-grid">
+              <div class="glass-card cockpit-card">
+                <h2>Severity Ring</h2>
+                <div id="severityChart" class="viz-canvas"></div>
+                <div class="stats-grid">
+                  <div class="stat-card critical"><div class="stat-num" id="statCritical">0</div><div class="stat-label">Critical</div></div>
+                  <div class="stat-card high"><div class="stat-num" id="statHigh">0</div><div class="stat-label">High</div></div>
+                  <div class="stat-card medium"><div class="stat-num" id="statMedium">0</div><div class="stat-label">Medium</div></div>
+                  <div class="stat-card low"><div class="stat-num" id="statLow">0</div><div class="stat-label">Low</div></div>
+                  <div class="stat-card info"><div class="stat-num" id="statInfo">0</div><div class="stat-label">Info / None</div></div>
+                </div>
+              </div>
+
+              <div class="glass-card cockpit-card">
+                <h2>OWASP Treemap</h2>
+                <div id="owaspBreakdown" class="viz-canvas"></div>
+              </div>
+
+              <div class="glass-card cockpit-card">
+                <h2>MITRE ATT&amp;CK 3D Matrix</h2>
+                <div class="mapping-feedback" id="mitreFeedback" style="display:none"></div>
+                <div class="mitre-controls" id="mitreControls" style="display:none">
+                  <select id="mitreFilterTactic">
+                    <option value="">All Tactics</option>
+                  </select>
+                  <select id="mitreFilterConfidence">
+                    <option value="">All Confidence</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                  <input type="text" id="mitreFilterSearch" placeholder="Search technique ID or name" />
+                  <button type="button" class="btn-sm" id="mitreFilterClear">Clear</button>
+                </div>
+                <div id="mitreMatrixScene" class="scene-canvas"></div>
+                <div id="mitreTechniqueCloud" class="technique-cloud"></div>
+                <div id="mitreMatrixCoverage" class="mitre-matrix-strip"></div>
+                <div id="mitreBreakdown" class="mitre-breakdown"></div>
+              </div>
+
+              <div class="glass-card cockpit-card" id="aiAnalysisCard" style="display:none">
+                <div class="ai-card-header">
+                  <h2>🧠 AI Threat Analysis</h2>
+                  <button class="btn-ai" id="btnAiAnalyze" onclick="aiAnalyze()">✨ Generate Analysis</button>
+                </div>
+                <div id="aiAnalysisContent" class="ai-content"></div>
+              </div>
+            </div>
+
+            <div class="glass-card threat-summary" id="threatNarrativeCard" style="display:none">
+              <div class="threat-header">
+                <h2>Threat Intelligence Summary</h2>
+                <span id="riskBadge" class="risk-badge"></span>
+              </div>
+              <p id="threatNarrative" class="threat-narrative"></p>
+              <div id="threatMeta" class="threat-meta"></div>
+            </div>
+
+            <div class="glass-card" id="aiExecCard" style="display:none">
+              <div class="ai-card-header">
+                <h2>📊 AI Executive Summary</h2>
+                <button class="btn-ai" id="btnAiExec" onclick="aiExecutiveSummary()">✨ Generate Summary</button>
+              </div>
+              <div id="aiExecContent" class="ai-content"></div>
+            </div>
+
+            <div class="glass-card">
+              <h2>Export Results</h2>
+              <div class="download-group">
+                <button class="btn-download btn-report" onclick="downloadPDF()">📄 PDF Report</button>
+                <button class="btn-download btn-report" onclick="downloadDOCX()">📃 DOCX Report</button>
+                <button class="btn-download" onclick="downloadJSON()">⬇ JSON</button>
+                <button class="btn-download" onclick="downloadCSV()">⬇ CSV</button>
+                <button class="btn-download" onclick="downloadTXT()">⬇ TXT</button>
+              </div>
+              <p class="export-note">PDF &amp; DOCX include branded intelligence narrative, MITRE mapping, and remediation priorities.</p>
+            </div>
+
+            <div class="glass-card findings-ops">
+              <h2>Findings <span class="badge" id="totalBadge">0</span></h2>
+              <div class="table-controls">
+                <input type="text" id="filterInput" placeholder="Filter findings…" />
+                <select id="filterSeverity">
+                  <option value="">All Severities</option>
+                  <option value="Critical">Critical</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                </select>
+              </div>
+              <div class="findings-viewport" id="findingsViewport">
+                <table id="findingsTable">
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Type</th>
+                      <th>Path</th>
+                      <th>OWASP</th>
+                      <th>MITRE ATT&amp;CK</th>
+                      <th>CVSS</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody id="findingsBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="glass-card">
+              <h2>Scan Stages</h2>
+              <div id="stageTiming" class="stage-timing"></div>
+            </div>
+
+            <div class="glass-card" id="executionSettings" style="display:none">
+              <h2>Execution Settings</h2>
+              <div id="executionSettingsGrid" class="runtime-grid"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-history" class="panel">
+          <div class="glass-card">
+            <h2>The Archives</h2>
+            <p class="card-subtitle">Historical missions rendered as an interactive timeline.</p>
+            <div id="historyTimeline" class="history-timeline"></div>
+          </div>
+        </section>
+
+        <section id="panel-owasp" class="panel">
+          <div class="glass-card">
+            <h2>OWASP Top 10 : 2025 — Codex</h2>
+            <div class="mapping-feedback" id="owaspRefFeedback" style="display:none"></div>
+            <div id="owaspReference" class="owasp-reference"></div>
+          </div>
+        </section>
+
+        <section id="panel-mitre" class="panel">
+          <div class="glass-card">
+            <h2>MITRE ATT&amp;CK Matrix Room</h2>
+            <p class="card-subtitle">
+              ATT&amp;CK Enterprise v16.1 — <span id="mitreTechCount">0</span> techniques indexed
+              <span class="mitre-version-badge">v16.1</span>
+            </p>
+            <div class="mapping-feedback" id="mitreRefFeedback" style="display:none"></div>
+            <div id="mitreMatrixFullScene" class="scene-canvas xl"></div>
+            <div id="mitreTechniqueCloudRoom" class="technique-cloud"></div>
+            <div id="mitreTacticOverview" class="mitre-tactic-overview"></div>
+          </div>
+
+          <div class="glass-card">
+            <h2>Technique Reference</h2>
+            <p class="card-subtitle">Expandable ATT&amp;CK cards with detection guidance, mitigations, and platforms.</p>
+            <div class="mitre-ref-controls">
+              <input type="text" id="mitreRefSearch" placeholder="Search by technique ID, name, tactic, platform" />
+              <button type="button" class="btn-sm" id="mitreRefExpandAll">Expand all</button>
+              <button type="button" class="btn-sm" id="mitreRefCollapseAll">Collapse all</button>
+            </div>
+            <div id="mitreReference" class="mitre-reference"></div>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <div class="footer-inner">
+          <span class="footer-copy">© 2026 Govind V Kartha. All rights reserved.</span>
+          <span class="footer-tagline">PentaVault — Automated VAPT Security Suite</span>
+        </div>
+      </footer>
     </div>
-    <nav>
-      <button type="button" class="tab active" data-tab="scan">New Scan</button>
-      <button type="button" class="tab" data-tab="history">History</button>
-      <button type="button" class="tab" data-tab="owasp">OWASP 2025</button>
-      <button type="button" class="tab" data-tab="mitre">MITRE ATT&amp;CK</button>
+  </div>
 
-    </nav>
-  </header>
-
-  <main>
-    <!-- ── New Scan Panel ─────────────────────────────── -->
-    <section id="panel-scan" class="panel active">
-      <div class="card scan-form-card">
-        <h2>Launch Scan</h2>
-        <form id="scanForm">
-          <div class="form-row">
-            <label>Target URL / IP</label>
-            <input type="text" id="target" placeholder="https://example.com" required />
-          </div>
-          <div class="form-row-group">
-            <div class="form-row">
-              <label>Scan Mode</label>
-              <select id="mode">
-                <option value="quick">Quick</option>
-                <option value="full">Full</option>
-                <option value="web-only">Web Only</option>
-                <option value="network-only">Network Only</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label>Threads</label>
-              <input type="number" id="threads" value="5" min="1" max="10" />
-            </div>
-            <div class="form-row">
-              <label>Timeout (s)</label>
-              <input type="number" id="timeout" value="10" min="1" max="60" />
-            </div>
-          </div>
-          <div class="form-row">
-            <label>Cookie (optional)</label>
-            <input type="text" id="cookie" placeholder="session=abc123" />
-          </div>
-          <div class="form-row toggle-row">
-            <label class="toggle">
-              <input type="checkbox" id="useBrowser" />
-              <span class="slider"></span>
-            </label>
-            <span>Use Selenium Browser Engine</span>
-          </div>
-          <div class="scan-btn-group">
-            <button type="submit" class="btn-primary" id="btnStart">Start Scan</button>
-            <button type="button" class="btn-cancel" id="btnCancel" style="display:none" onclick="cancelActiveScan()">&#x26D4; Stop Scan</button>
-          </div>
-        </form>
-      </div>
-
-      <!-- Live scan progress -->
-      <div class="card" id="progressCard" style="display:none">
-        <h2>Scan Progress</h2>
-        <div class="progress-info">
-          <span id="progressStage">Initialising…</span>
-          <span id="progressPct">0%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" id="progressFill" style="width:0%"></div>
-        </div>
-        <div class="progress-meta">
-          <span>Elapsed: <strong id="elapsed">0s</strong></span>
-          <span>Findings: <strong id="findingsCount">0</strong></span>
-        </div>
-        <div id="stageTimeline" class="stage-timeline"></div>
-        <div id="totalTimeDisplay" class="total-time-display" style="display:none"></div>
-      </div>
-
-      <!-- Results dashboard (shown after scan) -->
-      <div id="resultsPanel" style="display:none">
-        <div class="stats-grid">
-          <div class="stat-card critical"><div class="stat-num" id="statCritical">0</div><div class="stat-label">Critical</div></div>
-          <div class="stat-card high"><div class="stat-num" id="statHigh">0</div><div class="stat-label">High</div></div>
-          <div class="stat-card medium"><div class="stat-num" id="statMedium">0</div><div class="stat-label">Medium</div></div>
-          <div class="stat-card low"><div class="stat-num" id="statLow">0</div><div class="stat-label">Low</div></div>
-          <div class="stat-card info"><div class="stat-num" id="statInfo">0</div><div class="stat-label">Info / None</div></div>
-        </div>
-
-        <!-- OWASP Breakdown -->
-        <div class="card">
-          <h2>OWASP Breakdown</h2>
-          <div id="owaspBreakdown" class="owasp-bars"></div>
-        </div>
-
-        <!-- Threat Intelligence Summary -->
-        <div class="card" id="threatNarrativeCard" style="display:none">
-          <div class="threat-header">
-            <h2>Threat Intelligence Summary</h2>
-            <span id="riskBadge" class="risk-badge"></span>
-          </div>
-          <p id="threatNarrative" class="threat-narrative"></p>
-          <div id="threatMeta" class="threat-meta"></div>
-        </div>
-
-        <!-- AI-Powered Threat Analysis -->
-        <div class="card" id="aiAnalysisCard" style="display:none">
-          <div class="ai-card-header">
-            <h2>&#x1F9E0; AI Threat Analysis</h2>
-            <button class="btn-ai" id="btnAiAnalyze" onclick="aiAnalyze()">&#x2728; Generate AI Analysis</button>
-          </div>
-          <div id="aiAnalysisContent" class="ai-content"></div>
-        </div>
-
-        <!-- AI Executive Summary -->
-        <div class="card" id="aiExecCard" style="display:none">
-          <div class="ai-card-header">
-            <h2>&#x1F4CA; AI Executive Summary</h2>
-            <button class="btn-ai" id="btnAiExec" onclick="aiExecutiveSummary()">&#x2728; Generate Summary</button>
-          </div>
-          <div id="aiExecContent" class="ai-content"></div>
-        </div>
-
-        <!-- MITRE ATT&CK Breakdown -->
-        <div class="card">
-          <h2>MITRE ATT&amp;CK Coverage</h2>
-          <p class="card-subtitle">ATT&amp;CK Enterprise v16.1 — Tactic coverage heatmap &amp; technique correlation</p>
-          <!-- Matrix Coverage Heatmap -->
-          <div id="mitreMatrixCoverage" class="mitre-matrix-strip"></div>
-          <!-- Technique Breakdown Bars -->
-          <div id="mitreBreakdown" class="mitre-breakdown"></div>
-        </div>
-
-        <!-- Kill Chain / Attack Path -->
-        <div class="card">
-          <h2>Attack Path Analysis</h2>
-          <p class="card-subtitle">Potential kill-chain progression based on detected vulnerabilities</p>
-          <div id="attackPaths" class="attack-path-container"></div>
-        </div>
-
-        <!-- Download buttons -->
-        <div class="card">
-          <h2>Export Results</h2>
-          <div class="download-group">
-            <button class="btn-download btn-report" onclick="downloadPDF()">&#x1F4C4; PDF Report</button>
-            <button class="btn-download btn-report" onclick="downloadDOCX()">&#x1F4C3; DOCX Report</button>
-            <button class="btn-download" onclick="downloadJSON()">&#x2B07; JSON</button>
-            <button class="btn-download" onclick="downloadCSV()">&#x2B07; CSV</button>
-            <button class="btn-download" onclick="downloadTXT()">&#x2B07; TXT</button>
-          </div>
-          <p class="export-note">PDF &amp; DOCX include PentaVault branding, charts, MITRE breakdown &amp; recommendations</p>
-        </div>
-
-        <!-- Findings table -->
-        <div class="card">
-          <h2>Findings <span class="badge" id="totalBadge">0</span></h2>
-          <div class="table-controls">
-            <input type="text" id="filterInput" placeholder="Filter findings…" />
-            <select id="filterSeverity">
-              <option value="">All Severities</option>
-              <option value="Critical">Critical</option>
-              <option value="High">High</option>
-              <option value="Medium">Medium</option>
-              <option value="Low">Low</option>
-            </select>
-          </div>
-          <div class="table-wrapper">
-            <table id="findingsTable">
-              <thead>
-                <tr>
-                  <th>Severity</th>
-                  <th>Type</th>
-                  <th>Path</th>
-                  <th>OWASP</th>
-                  <th>MITRE ATT&amp;CK</th>
-                  <th>CVSS</th>
-                  <th>Detail</th>
-                </tr>
-              </thead>
-              <tbody id="findingsBody"></tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Module timing -->
-        <div class="card">
-          <h2>Scan Stages</h2>
-          <div id="stageTiming" class="stage-timing"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ── History Panel ──────────────────────────────── -->
-    <section id="panel-history" class="panel">
-      <div class="card">
-        <h2>Scan History</h2>
-        <div class="table-wrapper">
-          <table id="historyTable">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Target</th>
-                <th>Mode</th>
-                <th>Status</th>
-                <th>Findings</th>
-                <th>Started At</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="historyBody"></tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- ── OWASP 2025 Reference Panel ─────────────────── -->
-    <section id="panel-owasp" class="panel">
-      <div class="card">
-        <h2>OWASP Top 10 : 2025</h2>
-        <div id="owaspReference" class="owasp-reference"></div>
-      </div>
-    </section>
-
-    <!-- ── MITRE ATT&CK Reference Panel ───────────────── -->
-    <section id="panel-mitre" class="panel">
-      <!-- Matrix Overview -->
-      <div class="card">
-        <h2>MITRE ATT&amp;CK Enterprise Matrix</h2>
-        <p class="card-subtitle">
-          Coverage across all 14 ATT&amp;CK tactics — <span id="mitreTechCount">0</span> techniques mapped
-          <span class="mitre-version-badge">v16.1</span>
-        </p>
-        <div id="mitreTacticOverview" class="mitre-tactic-overview"></div>
-      </div>
-
-      <!-- Full Reference -->
-      <div class="card">
-        <h2>Technique Reference</h2>
-        <p class="card-subtitle">Click any technique for detection guidance, mitigations, platforms &amp; data sources</p>
-        <div id="mitreReference" class="mitre-reference"></div>
-      </div>
-    </section>
-
-
-  </main>
-
-  <!-- Finding detail modal -->
   <div class="modal-overlay" id="modalOverlay" style="display:none">
     <div class="modal">
       <button class="modal-close" id="modalClose">&times;</button>
       <h2 id="modalTitle">Finding Detail</h2>
+      <div id="cvssGauge" class="cvss-gauge"></div>
       <div id="modalContent"></div>
       <div class="modal-ai-section" id="modalAiSection">
-        <button class="btn-ai btn-ai-remediate" id="btnAiRemediate" onclick="aiRemediateModal()">&#x1F9E0; AI Remediation Guide</button>
+        <button class="btn-ai btn-ai-remediate" id="btnAiRemediate" onclick="aiRemediateModal()">🧠 AI Remediation Guide</button>
         <div id="modalAiContent" class="ai-content"></div>
       </div>
     </div>
   </div>
 
-  <!-- MITRE AI Explain Panel -->
   <div class="modal-overlay" id="mitreAiOverlay" style="display:none">
     <div class="modal mitre-ai-modal">
       <button class="modal-close" onclick="closeMitreAiPanel()">&times;</button>
       <div class="mitre-ai-header">
-        <span class="mitre-ai-icon">&#x1F9E0;</span>
+        <span class="mitre-ai-icon">🧠</span>
         <div>
           <h2 id="mitreAiTitle">AI Technique Explainer</h2>
           <p id="mitreAiSubtitle" class="card-subtitle" style="margin:4px 0 0"></p>
@@ -288,7 +410,7 @@
         <div class="mitre-ai-suggestions" id="mitreAiSuggestions">
           <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">How can an attacker exploit this?</span>
           <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">What logs should I monitor?</span>
-          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">Show me example attack code</span>
+          <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">Show me detection examples</span>
           <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">How does this relate to my other findings?</span>
           <span class="mitre-ai-chip" onclick="askMitreAiSuggestion(this)">Explain this to a non-technical manager</span>
         </div>
@@ -296,13 +418,9 @@
     </div>
   </div>
 
-  <footer>
-    <div class="footer-inner">
-      <span class="footer-copy">&copy; 2026 Govind V Kartha. All rights reserved.</span>
-      <span class="footer-tagline">PentaVault &mdash; Automated VAPT Security Suite</span>
-    </div>
-  </footer>
-
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

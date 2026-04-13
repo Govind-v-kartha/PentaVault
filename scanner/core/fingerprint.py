@@ -29,10 +29,10 @@ _TECH_SIGNATURES: list[tuple[str, str, str]] = [
     ("body", r"Joomla!", "Joomla"),
     ("body", r"Drupal", "Drupal"),
     ("body", r"/static/admin/.*django", "Django"),
-    ("body", r"laravel", "Laravel"),
-    ("body", r"react", "React"),
-    ("body", r"vue\.js|vuejs", "Vue.js"),
-    ("body", r"angular", "Angular"),
+    ("body", r"laravel_session|name=[\"']csrf-token[\"']|/vendor/laravel", "Laravel"),
+    ("body", r"react(?:\.production)?(?:\.min)?\.js|react-dom(?:\.production)?(?:\.min)?\.js|data-reactroot|__REACT_DEVTOOLS_GLOBAL_HOOK__", "React"),
+    ("body", r"vue(?:\.runtime)?(?:\.global)?(?:\.prod)?(?:\.min)?\.js|__VUE__|data-v-[0-9a-f]{6,}", "Vue.js"),
+    ("body", r"ng-version=|ng-app|angular(?:\.min)?\.js", "Angular"),
     ("body", r"next\.js|nextjs|_next/", "Next.js"),
 ]
 
@@ -92,6 +92,21 @@ def detect_tech_stack(url: str, timeout: float = 10.0) -> dict[str, Any]:
     }
 
 
+def _parse_not_after(value: str) -> datetime | None:
+    formats = [
+        "%b %d %H:%M:%S %Y %Z",
+        "%b %d %H:%M:%S %Y GMT",
+        "%Y%m%d%H%M%SZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
 def check_ssl(hostname: str, port: int = 443) -> dict[str, Any]:
     """Examine the TLS certificate and cipher suite for *hostname*."""
     result: dict[str, Any] = {
@@ -118,11 +133,12 @@ def check_ssl(hostname: str, port: int = 443) -> dict[str, Any]:
                     result["subject"] = str(dict(x[0] for x in cert.get("subject", [])))
                     not_after = cert.get("notAfter", "")
                     if not_after:
-                        expiry = datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(
-                            tzinfo=timezone.utc
-                        )
-                        result["expires"] = expiry.isoformat()
-                        result["days_remaining"] = (expiry - datetime.now(timezone.utc)).days
+                        expiry = _parse_not_after(not_after)
+                        if expiry:
+                            result["expires"] = expiry.isoformat()
+                            result["days_remaining"] = (expiry - datetime.now(timezone.utc)).days
+                        else:
+                            log.warning("SSL certificate expiry parse failed for %s: %s", hostname, not_after)
 
                 if cipher_info:
                     result["cipher"] = cipher_info[0]

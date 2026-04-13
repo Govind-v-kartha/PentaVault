@@ -55,7 +55,7 @@
 2. Performs DNS reconnaissance, subdomain enumeration, port scanning, and service detection
 3. Fingerprints the technology stack, detects WAFs, analyses SSL/TLS certificates
 4. Crawls web applications to discover endpoints, forms, parameters, and API routes
-5. Runs 6+ vulnerability testing modules concurrently (SQLi, XSS, Headers, SSRF, IDOR, Open Redirect)
+5. Runs 23+ vulnerability testing modules concurrently (SQLi, XSS, Headers, SSRF, IDOR, Open Redirect, Command Injection, XXE, LFI, Sensitive Files, NoSQLi, SSTI, GraphQL Abuse, JWT Checks, Host Header Injection, CORS Misconfiguration, HPP, CRLF Injection, Request Smuggling, Mass Assignment/BOLA, Insecure Deserialization, Prototype Pollution, CSV/Formula Injection)
 6. Optionally uses Selenium Chrome for JS-rendered apps (SPA, AJAX, dynamic forms)
 7. Scores all findings with CVSS v3.1, maps to OWASP 2025 Top 10 and MITRE ATT&CK v16.1
 8. Generates standard, executive, and technical JSON reports
@@ -83,8 +83,10 @@
 
 ### External Tool Dependencies
 
-- **Nmap**: Must be installed and in PATH for port scanning
-- **Google Chrome**: Required only when using `--browser` or Selenium mode
+- **Nmap**: Optional but recommended; scans continue with a warning when unavailable
+- **Google Chrome / Chromium / Edge**: Required only for Selenium browser mode
+- **ChromeDriver / EdgeDriver**: Required for Selenium browser mode
+- **Node.js**: Required for DOCX report export
 
 ---
 
@@ -118,6 +120,10 @@ c:\Project 1\
 │   │   ├── ssrf.py                  # Server-Side Request Forgery
 │   │   ├── idor.py                  # Insecure Direct Object Reference
 │   │   ├── open_redirect.py         # Open Redirect detection (7 payload variants)
+│   │   ├── command_injection.py     # OS command injection detection
+│   │   ├── xxe.py                   # XML External Entity detection
+│   │   ├── prototype_pollution.py   # Prototype pollution heuristic checks
+│   │   ├── csv_formula_injection.py # CSV/formula injection heuristic checks
 │   │   ├── sqli_selenium.py         # Browser-based SQLi with screenshot evidence
 │   │   └── xss_selenium.py          # Browser-based XSS with alert() hooking
 │   │
@@ -126,15 +132,15 @@ c:\Project 1\
 │   │   ├── logger.py                # Centralized file + console logging
 │   │   ├── report_exporter.py       # JSON report generation (3 variants)
 │   │   ├── mitre_mapping.py         # MITRE ATT&CK v16.1 mapping engine
-│   │   ├── ai_engine.py             # Gemini AI threat intelligence (4-key failover)
+│   │   ├── ai_engine.py             # Gemini AI threat intelligence (stateful key-pool rotation/cooldown + model failover)
 │   │   └── pdf_report.py            # Professional PDF/DOCX report generation
 │   │
 │   ├── web/                         # Web Dashboard (FastAPI)
 │   │   ├── app.py                   # FastAPI application + REST API
 │   │   └── static/                  # Frontend assets
 │   │       ├── index.html           # Dashboard HTML (single-page app)
-│   │       ├── style.css            # Dark theme CSS (~600 lines)
-│   │       └── app.js               # Dashboard JavaScript (~680 lines)
+│   │       ├── style.css            # SOC Obsidian design system CSS (glass panels, responsive rail/stage layout)
+│   │       └── app.js               # Interaction engine (scan lifecycle, AI actions, D3 + Three.js visual controllers)
 │   │
 │   ├── reports/                     # Auto-created: JSON report output
 │   ├── data/                        # Auto-created: persistent scan history
@@ -171,6 +177,7 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 ### Stage 4: Web Crawling (30% progress)
 - **Runs only for**: `full`, `web-only`, `quick` modes (URL targets only)
 - Two crawlers: static HTTP (`crawler.py`) or Selenium (`selenium_crawler.py`)
+- Crawl strategy supports `auto`, `httpx`, `selenium`, and `hybrid` (httpx first with Selenium fallback on low coverage)
 - Discovers: endpoints (URLs), forms (with fields + actions), parameters, JS API routes
 - `CrawlResult` class stores: `endpoints`, `forms`, `parameters`, `api_endpoints`
 - Crawl depth/pages: 2/50 (quick) or 3/200 (full)
@@ -192,6 +199,23 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 4. **SSRF** (`ssrf.py`) — Injects internal/cloud-metadata URLs (localhost, 127.0.0.1, 169.254.169.254, Redis, Elasticsearch)
 5. **IDOR** (`idor.py`) — Extracts numeric IDs from URLs, attempts access to adjacent objects
 6. **Open Redirect** (`open_redirect.py`) — 7 payload variants (protocol bypass, path traversal, URL encoding, etc.)
+7. **Command Injection** (`command_injection.py`) — Separator-based payloads with output-marker confirmation (`expr`, `set /a`, canary echoes)
+8. **XXE** (`xxe.py`) — XML external entity payloads with local-file disclosure marker detection
+9. **LFI** (`lfi.py`) — Path traversal and local file disclosure checks for file-like parameters
+10. **Sensitive Files** (`sensitive_files.py`) — Probes common exposed backup/config/admin artifacts
+11. **NoSQLi** (`nosqli.py`) — Boolean and error-based NoSQL injection heuristics
+12. **SSTI** (`ssti.py`) — Server-side template expression evaluation probes
+13. **GraphQL Abuse** (`graphql_abuse.py`) — Introspection exposure and query-depth control checks
+14. **JWT Checks** (`jwt_checks.py`) — Static JWT weakness checks (`alg=none`, suspicious `kid`, missing `exp`)
+15. **Host Header Injection** (`host_header.py`) — Host/X-Forwarded-Host reflection and poisoning indicators
+16. **CORS Misconfiguration** (`cors_misconfig.py`) — Overly permissive origin/credential policy detection
+17. **HTTP Parameter Pollution** (`hpp.py`) — Duplicate parameter ambiguity checks
+18. **CRLF Injection** (`crlf_injection.py`) — Response splitting/header injection probes
+19. **Request Smuggling** (`request_smuggling.py`) — TE/CL framing discrepancy heuristic probes
+20. **Mass Assignment/BOLA** (`mass_assignment.py`) — Privileged field injection and object-reference authorization drift checks
+21. **Insecure Deserialization** (`insecure_deserialization.py`) — Serialized payload error/behavioral probes for unsafe deserialization paths
+22. **Prototype Pollution** (`prototype_pollution.py`) — Prototype-key probes (`__proto__`, `constructor.prototype`) with baseline/follow-up drift checks
+23. **CSV/Formula Injection** (`csv_formula_injection.py`) — Formula-prefixed value probes (`=`, `+`, `-`, `@`) against export/report surfaces
 
 ### Stage 6: CVSS Scoring (85% progress)
 - `enrich_findings()` in `scorer.py` computes CVSS v3.1 scores
@@ -236,6 +260,7 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - **Form Extraction**: Parses `<form>` elements with field names, types, and actions
 - **API Route Detection**: Finds `/api/`, REST-like patterns in HTML/JS
 - **Respects**: robots.txt (advisory), URL depth/page limits
+- **Cancellation**: Supports cooperative stop via optional `should_stop` callback
 
 ### `scanner/core/selenium_crawler.py`
 - **Purpose**: JavaScript-aware browser-based crawler
@@ -243,6 +268,7 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - **Detection**: Regex on page source for API endpoints, event listener-bound URLs
 - **Reuses**: Same `CrawlResult` class as static crawler
 - **Browser**: Headless Chrome via Selenium WebDriver
+- **Cancellation**: Supports cooperative stop via optional `should_stop` callback
 
 ### `scanner/core/scorer.py`
 - **Purpose**: CVSS v3.1 scoring and severity enrichment
@@ -289,6 +315,83 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - **Detection**: Follows redirects and checks final destination
 - **Output**: Finding with `type: "open_redirect"`
 
+### `scanner/modules/command_injection.py` — OS Command Injection
+- **Techniques**: Command separator payloads (`;`, `|`, `&&`) across URL and POST form parameters
+- **Evidence model**: Requires response markers not present in baseline (numeric command outputs and command canaries)
+- **Safety posture**: Uses non-destructive arithmetic/echo probes for confirmation
+- **Output**: Finding with `title: OS Command Injection ...`, OWASP A05 mapping
+
+### `scanner/modules/xxe.py` — XML External Entity (XXE)
+- **Techniques**: XML `<!DOCTYPE ... <!ENTITY ... SYSTEM ...>>` payloads targeting common local file paths
+- **Parameter targeting**: XML-like parameter names/values only (`xml`, `payload`, `import`, etc.)
+- **Evidence model**: Requires file disclosure markers that differ from baseline response
+- **Output**: Finding with `title: XXE ...`, OWASP A05 mapping
+
+### `scanner/modules/lfi.py` — Local File Inclusion / Path Traversal
+- **Techniques**: Query/form parameter replacement with traversal and absolute path payloads
+- **Evidence model**: OS file markers (`root:x:0:0:`, `[fonts]`, `PATH=`) that are absent from baseline
+- **Output**: High-severity finding with OWASP A01 mapping
+
+### `scanner/modules/sensitive_files.py` — Sensitive File Exposure
+- **Techniques**: Direct probing of common sensitive paths (`/.env`, `/.git/config`, `/backup.zip`, `/actuator/env`, etc.)
+- **Evidence model**: HTTP 200 on sensitive paths and secret/config markers in response body
+- **Output**: High-severity misconfiguration finding with OWASP A02 mapping
+
+### `scanner/modules/nosqli.py` — NoSQL Injection
+- **Techniques**: Boolean differential probes and error-marker probes for NoSQL backends
+- **Heuristics**: Baseline/true/false similarity and size differentials to reduce noise
+- **Output**: High-severity injection finding with OWASP A05 mapping
+
+### `scanner/modules/ssti.py` — Server-Side Template Injection
+- **Techniques**: Template expression payloads across likely rendered parameters
+- **Evidence model**: Arithmetic/string marker evaluation visible in responses and absent from baseline
+- **Output**: High-severity injection finding with OWASP A05 mapping
+
+### `scanner/modules/graphql_abuse.py` — GraphQL Abuse Checks
+- **Techniques**: Introspection query probing and nested/deep query control checks
+- **Coverage**: Candidate endpoint detection from default paths + crawled endpoints
+- **Output**: Medium/Low findings for exposed introspection or missing complexity controls (OWASP A06)
+
+### `scanner/modules/jwt_checks.py` — JWT Static Security Checks
+- **Techniques**: Token discovery from cookie/query/form inputs and offline header/claim inspection
+- **Checks**: `alg=none`, suspicious `kid` path/URL patterns, missing `exp`
+- **Output**: Auth-related findings with OWASP A07 mapping
+
+### `scanner/modules/host_header.py` — Host Header Injection
+- **Techniques**: Modified `Host` and `X-Forwarded-Host` probes against baseline response
+- **Evidence model**: Payload reflection in body or redirect `Location`
+- **Output**: Medium finding with OWASP A05 mapping
+
+### `scanner/modules/cors_misconfig.py` — CORS Misconfiguration
+- **Techniques**: Crafted `Origin` preflight checks
+- **Evidence model**: Arbitrary-origin reflection and wildcard+credentials combinations
+- **Output**: Medium/High misconfiguration findings with OWASP A02 mapping
+
+### `scanner/modules/hpp.py` — HTTP Parameter Pollution
+- **Techniques**: Duplicate parameter injection with behavioral comparison to baseline
+- **Evidence model**: Status-code or response-size deltas under duplicated parameters
+- **Output**: Medium injection finding with OWASP A05 mapping
+
+### `scanner/modules/crlf_injection.py` — CRLF Injection
+- **Techniques**: URL-encoded CRLF payload injection in query parameters
+- **Evidence model**: Presence of injected/sentinel response headers
+- **Output**: Medium injection finding with OWASP A05 mapping
+
+### `scanner/modules/request_smuggling.py` — HTTP Request Smuggling (Heuristic)
+- **Techniques**: Ambiguous `Content-Length` + `Transfer-Encoding` request framing probe
+- **Evidence model**: Differential status behavior on TE/CL ambiguity requests
+- **Output**: Medium injection finding with OWASP A05 mapping
+
+### `scanner/modules/mass_assignment.py` — Mass Assignment / BOLA
+- **Techniques**: Privileged-field injection into update forms plus object-ID mutation on query parameters
+- **Evidence model**: Access/status/response-shape drift when sensitive fields or object references are manipulated
+- **Output**: Medium/High access-control findings with OWASP A01 mapping
+
+### `scanner/modules/insecure_deserialization.py` — Insecure Deserialization
+- **Techniques**: Serialized payload probes (Java/PHP/Python/.NET style) against likely serialized parameters
+- **Evidence model**: Deserializer-specific error markers or baseline→5xx transitions
+- **Output**: High-severity integrity finding with OWASP A08 mapping
+
 ### `scanner/modules/sqli_selenium.py` — Browser-Based SQL Injection
 - **Advantage**: Handles JS-rendered forms, CSRF tokens, client-side form validation
 - **Evidence**: Auto-captures PNG screenshots of confirmed SQL injections
@@ -320,7 +423,13 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
   3. `findings_technical.json` — Grouped by OWASP category with detailed evidence per finding
 - **OWASP 2025 Map**: Contains the full `OWASP_2025` dict (A01–A10)
 - **Functions**: `export_json()`, `_build_summary()`, `_build_owasp_breakdown()`, `_build_affected_endpoints()`, `_assign_ids()`
-- **Scanner Version**: Embedded as constant `SCANNER_VERSION = "1.1.0"`
+- **Scanner Version**: Embedded as constant `SCANNER_VERSION = "1.2.0"`
+
+### `scanner/utils/ai_engine.py`
+- **Purpose**: Gemini AI threat intelligence with centralized prompt composition and key/model failover
+- **Config Sources**: `PENTAVAULT_GEMINI_API_KEYS` (CSV), `GEMINI_API_KEY` (single fallback), `PENTAVAULT_GEMINI_MODELS` (CSV override)
+- **Behavior**: Rotates across keys and models on recoverable API failures (429/503/404/401/403 and transient request errors)
+- **Prompt Architecture**: Shared `_compose_prompt()` enforces common output rules (HTML-only, scan-anchored, non-generic) across threat analysis, remediation, MITRE explain, and executive summary generation
 
 ### `scanner/utils/mitre_mapping.py`
 - **Purpose**: MITRE ATT&CK Enterprise v16.1 professional threat intelligence mapping
@@ -348,16 +457,20 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - **Persistence**: `_load_history()` on startup, `_save_history()` after each state change — atomic writes via temp file + `os.replace()` to prevent corruption
 - **Background Execution**: `_run_scan()` runs in a daemon thread per scan
 - **Models**:
-  - `ScanRequest` (Pydantic): target, mode, cookie, threads (1–10), timeout (1–60), use_browser
+  - `ScanRequest` (Pydantic): target, mode, cookie, threads (1–10), timeout (1–60), use_browser, crawl_mode (`auto|httpx|selenium|hybrid`)
   - `ScanStatus`: scan_id, status, target, mode, progress, current_stage, stages, started_at, elapsed, findings_count
 
 ### Frontend: Single-Page Application
 - **Technology**: Vanilla HTML/CSS/JS (no frameworks)
-- **Theme**: Dark theme with CSS custom properties
+- **Theme**: SOC Obsidian command-center theme with command rail + stage workspace
 - **4 Tabs**: New Scan, History, OWASP 2025, MITRE ATT&CK
 - **Live Timer**: Client-side interval timer (250ms tick) independent of API polling
 - **Poll Interval**: 1 second during active scan
 - **Total Time Display**: Prominent banner after scan completion showing status + duration
+- **Mapping rendering resilience**: Request-token guards prevent stale async responses from overwriting newer MITRE/OWASP views during rapid tab/scan switches
+- **Frontend mapping cache**: In-memory cache for OWASP reference, MITRE reference, and per-scan MITRE breakdown payloads to reduce redundant fetches
+- **AI error UX contract**: Frontend AI calls use shared parsing compatible with both legacy string errors and structured backend `detail` objects; provider/config internals are sanitized from user-facing messages.
+- **MITRE chart fallback strategy**: Primary renderer uses Three.js matrix scenes + interactive tactic strip/filtering. If 3D or motion is unavailable, UI falls back to readable static/empty-state components.
 
 ---
 
@@ -390,11 +503,12 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 | TA0040 | Impact | Manipulation, disruption, destruction |
 
 ### Web UI Components
-- **Matrix Coverage Heatmap**: Color-coded tactic strip (none / med / high coverage)
-- **Technique Breakdown Bars**: Grouped by tactic, bar chart with confidence dots
-- **Attack Path Visualization**: Kill-chain node chain with color-coded phases
-- **Technique Reference Panel**: Expandable cards with detection, mitigations, platforms, data sources
+- **Matrix Coverage Scene + Strip**: Primary MITRE coverage view uses an interactive Three.js tactic matrix scene synchronized with a clickable tactic strip (counts + coverage). If 3D is unavailable, mapping feedback and static fallback messaging remain available.
+- **Technique Breakdown Bars**: Grouped by tactic, bar chart with confidence dots + interactive filters (tactic, confidence, search, clear)
+- **Attack Path Visualization**: Responsive, collapsible vertical timeline of kill-chain phases with severity markers, per-phase finding lists, and progression connectors.
+- **Technique Reference Panel**: Expandable cards with search + expand/collapse-all controls and keyboard-accessible card toggles
 - **Modal Detail**: Full MITRE metadata per finding in click-to-expand modal
+- **Mapping UX states**: Explicit loading, error, and empty-state UI for MITRE/OWASP sections with retry affordances
 
 ---
 
@@ -451,6 +565,7 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - `sqli_selenium.py` — Replaces sqli.py for more accurate form testing
 - `xss_selenium.py` — Replaces xss.py with alert() hook detection
 - `browser.py` — Shared Chrome options and WebDriver setup
+- `dependency_check.py` — Runtime preflight checks for nmap/browser/node capabilities
 
 ### Features
 - **Headless Chrome** via ChromeDriver (auto-managed by webdriver-manager)
@@ -459,6 +574,7 @@ The scan pipeline executes sequentially through 7 stages. Each stage updates pro
 - **CSRF Token Handling**: Browser can handle dynamic CSRF tokens in forms
 - **SPA Support**: Crawls JavaScript-generated content
 - **Resource Limits**: Reduced browser capabilities for stability (images disabled, etc.)
+- **Sandbox Policy**: Chrome sandbox remains enabled by default; set `PENTAVAULT_ALLOW_NO_SANDBOX=1` only in constrained environments where sandbox startup fails
 
 ### Execution Model
 - HTTP modules (`headers`, `ssrf`, `idor`, `open_redirect`) run concurrently in thread pool
@@ -549,7 +665,7 @@ Target URL/IP
 [Crawler / Selenium Crawler] ───► CrawlResult (endpoints, forms, params)
     │
     ▼
-[Vulnerability Modules x6] ───► raw findings[] (list of dicts)
+[Vulnerability Modules x21] ───► raw findings[] (list of dicts)
     │
     ▼
 [CVSS Scorer + Enrichment] ───► enriched findings[] (with severity, OWASP, MITRE)
@@ -587,7 +703,7 @@ Target URL/IP
    - Full payloads and reproduction steps
 
 ### Report Metadata
-- Scanner version (1.1.0)
+- Scanner version (1.2.0)
 - Scan date/time
 - Target URL
 - Scan mode
@@ -610,7 +726,7 @@ Target URL/IP
 
 ### CLI Mode
 - `ThreadPoolExecutor(max_workers=threads)` in `main.py`
-- All 6 vulnerability modules submitted as futures
+- In HTTP mode, all 23 vulnerability modules are submitted as futures
 - `as_completed()` for progress tracking
 
 ### Web Mode
@@ -670,8 +786,10 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 | `--mode` | str | `full` | quick, full, web-only, network-only | Scan mode |
 | `--threads` | int | 5 | 1–10 (clamped) | Concurrent threads |
 | `--timeout` | float | 10.0 | — | Per-request timeout |
+| `--request-delay` | float | 0.0 | 0.0–2.0 | Delay between crawler requests/navigation |
 | `--cookie` | str | None | — | Session cookie |
 | `--browser` | flag | False | — | Headless Selenium |
+| `--crawl-mode` | str | `auto` | auto, httpx, selenium, hybrid | Crawler strategy |
 | `--headed` | flag | False | — | Visible browser (implies --browser) |
 | `--output` | str | `findings.json` | — | Output JSON path |
 
@@ -696,25 +814,29 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Total time display**: Appears after completion — color-coded by status (green=completed, red=failed, yellow=cancelled)
 
 ### Results Dashboard (shown after scan)
-- **Severity Grid**: 5 stat cards (Critical / High / Medium / Low / Info) with color-coded borders
-- **OWASP Breakdown**: Horizontal bar chart sorted by count
+- **Mission Control**: Live stage feed + live finding stream + 3D progress engine with checkpoint pulse/audio cue toggle
+- **Runtime Behavior Cards**: “Runtime Behavior” + “Execution Settings” blocks show effective mode, threads, timeout, request delay, crawl resolution, HTTP worker model, and browser timeout budget.
+- **Severity Ring**: D3 radial severity visualization with animated counters
+- **OWASP Treemap**: D3 treemap with click-to-filter behavior wired to findings table
 - **MITRE ATT&CK Coverage**:
   - Matrix summary stats (tactics/techniques/coverage%)
-  - Heatmap strip (14 tactic cells with hit/miss coloring)
-  - Technique bars grouped by tactic with confidence dots
-- **Attack Path Analysis**: Kill-chain nodes with phase colors and finding titles
-- **Export Buttons**: JSON / CSV / TXT download
-- **Findings Table**: Sortable columns (Severity, Type, Path, OWASP, MITRE ATT&CK, CVSS, Detail) with text+severity filters
-- **Finding Modal**: Click any row to see full detail including MITRE cards, screenshot evidence, recommendation
+  - Interactive Three.js tactic matrix scene synchronized with tactic strip filtering
+  - Technique cloud pills and grouped breakdown rows with confidence markers
+  - Resilient loading/error/empty states for mapping requests
+- **Attack Path Analysis**: Three.js attack node graph + phase timeline controls with hover/highlight linking
+- **AI Intelligence Cards**: Threat analysis, executive summary, modal remediation, and MITRE explainer panel with sanitized error UX
+- **Export Buttons**: JSON / CSV / TXT + PDF + DOCX download
+- **Findings Table**: Virtualized chunk rendering with text/severity filters and detail modal
+- **Finding Modal**: CVSS gauge + MITRE cards + remediation generation in context
 - **Scan Stages**: Timing bar chart per pipeline stage
 
 ### Design System
-- **Color Palette**: Dark theme (#0d1117 background, #161b22 cards)
-- **Accent**: Cyan (#00e5ff)
-- **Severity Colors**: Critical (#ff1744), High (#ff6d00), Medium (#ffd600), Low (#00e676), Info (#448aff)
-- **Typography**: Segoe UI / system-ui
-- **Border Radius**: 8px
-- **Responsive**: Grid columns collapse on smaller screens
+- **Theme**: SOC Obsidian command-center shell (command rail + stage workspace)
+- **Visual language**: Glass cards, depth layers, neon signal accents, and motion-safe transitions
+- **Typography**: Syne (display), DM Sans (body), JetBrains Mono (telemetry)
+- **Severity Colors**: Critical (#ff1f4b), High (#ff6b35), Medium (#f5a623), Low (#00ff9d), Info (#4fa5ff)
+- **Responsive**: Rail-and-panel layout adapts across desktop/tablet/mobile breakpoints
+- **Reduced-motion support**: 3D scenes degrade to static fallback cards when motion reduction is requested
 
 ### History Panel
 - Table: ID, Target, Mode, Status (badge), Findings count, Started At, Actions
@@ -731,15 +853,15 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Action**: Launches background scan thread
 
 ### `GET /api/scan/{scan_id}`
-- **Response**: Full scan state including progress, current_stage, stages, elapsed, findings, summary, error
-- **Used For**: Polling during scan
+- **Response**: Full scan state including progress, current_stage, stages, elapsed, findings, summary, error, plus additive `runtime_config` and `execution_metadata`
+- **Used For**: Polling during scan and showing effective runtime behavior settings in UI
 
 ### `GET /api/scan/{scan_id}/findings`
 - **Response**: `{ findings: [...] }`
 
 ### `GET /api/scan/{scan_id}/mitre`
-- **Response**: `{ mitre_breakdown: [...], attack_paths: [...], matrix_coverage: {...} }`
-- **Computed**: On-demand from scan findings
+- **Response**: `{ target, threat_narrative, mitre_breakdown, attack_paths, matrix_coverage }`
+- **Behavior**: Uses deterministic per-scan cache key derived from findings signature; recomputes only when findings change
 
 ### `GET /api/scans`
 - **Response**: List of all scans (most recent first) with summary info
@@ -763,6 +885,30 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 ### `GET /api/evidence/{filename}`
 - **Response**: PNG screenshot file
 - **Security**: Path traversal prevention via `Path(filename).name`
+
+### `POST /api/ai/analyze`
+- **Body**: `{ scan_id }`
+- **Response (success)**: `{ analysis: "..." }`
+- **Behavior**: Generates threat analysis from scan findings + MITRE coverage; uses deterministic per-scan cache key to avoid duplicate model calls for identical scan state
+- **Error contract**: On failure returns structured FastAPI `detail` object `{ code, message, retryable }` with sanitized, user-safe messages
+
+### `POST /api/ai/remediate`
+- **Body**: `{ scan_id, finding_index }`
+- **Response (success)**: `{ remediation: "..." }`
+- **Behavior**: Generates per-finding remediation guidance; cache key includes finding index + finding payload signature
+- **Error contract**: Uses the same structured/sanitized AI error `detail` object
+
+### `POST /api/ai/executive-summary`
+- **Body**: `{ scan_id }`
+- **Response (success)**: `{ summary: "..." }`
+- **Behavior**: Generates executive summary and caches it; also stores in `scan["_ai_executive_summary"]` for PDF/DOCX reuse
+- **Error contract**: Uses the same structured/sanitized AI error `detail` object
+
+### `POST /api/ai/mitre-explain`
+- **Body**: `{ scan_id, technique_id, technique_name, tactic, question }`
+- **Response (success)**: `{ explanation: "..." }`
+- **Behavior**: Generates MITRE technique explainer in scan context; cache key includes normalized question text and findings signature
+- **Error contract**: Uses the same structured/sanitized AI error `detail` object
 
 ---
 
@@ -788,6 +934,23 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 | `scanner/modules/ssrf.py` | ~120 | SSRF detection |
 | `scanner/modules/idor.py` | ~100 | IDOR detection |
 | `scanner/modules/open_redirect.py` | ~100 | Open redirect detection |
+| `scanner/modules/command_injection.py` | ~210 | OS command injection detection |
+| `scanner/modules/xxe.py` | ~200 | XXE detection |
+| `scanner/modules/lfi.py` | ~190 | Local file inclusion/path traversal detection |
+| `scanner/modules/sensitive_files.py` | ~110 | Sensitive file exposure detection |
+| `scanner/modules/nosqli.py` | ~280 | NoSQL injection detection |
+| `scanner/modules/ssti.py` | ~170 | SSTI detection |
+| `scanner/modules/graphql_abuse.py` | ~110 | GraphQL abuse checks |
+| `scanner/modules/jwt_checks.py` | ~140 | JWT static security checks |
+| `scanner/modules/host_header.py` | ~90 | Host header injection checks |
+| `scanner/modules/cors_misconfig.py` | ~90 | CORS misconfiguration checks |
+| `scanner/modules/hpp.py` | ~110 | HTTP parameter pollution checks |
+| `scanner/modules/crlf_injection.py` | ~90 | CRLF injection checks |
+| `scanner/modules/request_smuggling.py` | ~80 | Request smuggling heuristic checks |
+| `scanner/modules/mass_assignment.py` | ~260 | Mass assignment/BOLA heuristic checks |
+| `scanner/modules/insecure_deserialization.py` | ~290 | Insecure deserialization heuristic checks |
+| `scanner/modules/prototype_pollution.py` | ~250 | Prototype pollution heuristic checks |
+| `scanner/modules/csv_formula_injection.py` | ~260 | CSV/formula injection heuristic checks |
 | `scanner/modules/sqli_selenium.py` | ~250 | Browser SQLi with evidence |
 | `scanner/modules/xss_selenium.py` | ~250 | Browser XSS with alert hooks |
 | `scanner/utils/__init__.py` | ~1 | Package marker |
@@ -796,8 +959,8 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 | `scanner/utils/mitre_mapping.py` | ~800 | MITRE ATT&CK mapping engine |
 | `scanner/web/app.py` | ~515 | FastAPI backend |
 | `scanner/web/static/index.html` | ~245 | Dashboard HTML |
-| `scanner/web/static/style.css` | ~600 | Dark theme CSS |
-| `scanner/web/static/app.js` | ~700 | Dashboard JavaScript |
+| `scanner/web/static/style.css` | ~1900 | SOC Obsidian design system CSS (rail/stage layout, glass cards, responsive + motion fallback) |
+| `scanner/web/static/app.js` | ~3000 | Frontend interaction engine (scan lifecycle, AI UX, D3 + Three.js scene controllers) |
 
 ---
 
@@ -822,8 +985,10 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 
 ### System Dependencies
 - **Python 3.13+**: Required runtime
-- **Nmap**: Required for port scanning (network-only, full modes)
-- **Google Chrome**: Required only for Selenium browser mode
+- **Nmap**: Optional but recommended; scans continue with warnings when unavailable
+- **Google Chrome / Chromium / Edge**: Required for Selenium browser mode
+- **ChromeDriver / EdgeDriver**: Required for Selenium browser mode
+- **Node.js**: Required for DOCX report export
 
 ---
 
@@ -834,7 +999,7 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 3. **Chrome Processes**: Browser mode may leave orphaned Chrome processes on crash — `_run_module_with_timeout` handles cleanup via taskkill.
 4. **Windows-Specific**: `taskkill` command is Windows-only. Cross-platform would need `os.kill()` or `psutil`.
 5. **Rate Limiting**: No built-in rate limiting to target — high thread counts may trigger target WAF/IDS.
-6. **Scan Cancellation**: Uses `_cancel` flag checked at all stage boundaries with proper status/history cleanup — does not interrupt mid-module execution.
+6. **Scan Cancellation**: Uses `_cancel` stage checks plus module/crawler `should_stop` checkpoints for more responsive cancellation with partial-result returns.
 7. **CORS**: API allows all origins (`allow_origins=["*"]`) — suitable for local development, not production deployment.
 8. **Authentication**: No dashboard authentication — anyone with network access to port 8000 can run scans.
 9. **Evidence Storage**: Screenshots stored on disk with no auto-cleanup.
