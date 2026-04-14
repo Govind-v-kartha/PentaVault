@@ -15,6 +15,15 @@ class _FakeThread:
 
 
 class TestScanRuntimeMetadata(unittest.IsolatedAsyncioTestCase):
+    async def test_frontend_mode_info_defaults_to_legacy(self):
+        with patch("scanner.web.app.FRONTEND_MODE", "legacy"):
+            payload = await web_app.frontend_mode_info()
+
+        self.assertEqual(payload.get("selected_mode"), "legacy")
+        self.assertEqual(payload.get("active_mode"), "legacy")
+        self.assertIsInstance(payload.get("available_modes"), list)
+        self.assertIn("legacy", payload.get("available_modes"))
+
     async def test_start_scan_populates_runtime_metadata_from_request(self):
         req = web_app.ScanRequest(
             target="https://example.com",
@@ -131,6 +140,29 @@ class TestScanRuntimeMetadata(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(runtime.get("use_browser"), True)
         finally:
             web_app.scans.pop(scan_id, None)
+
+    async def test_root_uses_react_index_when_mode_is_react_and_dist_exists(self):
+        fake_path = web_app.Path("D:/fake/react/index.html")
+        with (
+            patch("scanner.web.app.FRONTEND_MODE", "react"),
+            patch("scanner.web.app.FRONTEND_DIST_DIR", web_app.Path("D:/fake/react")),
+            patch.object(web_app.Path, "exists", return_value=True),
+            patch.object(web_app.Path, "is_file", return_value=True),
+        ):
+            resolved = web_app._resolve_dashboard_index_path()
+
+        self.assertEqual(str(resolved), str(fake_path))
+
+    async def test_root_falls_back_to_legacy_when_react_dist_missing(self):
+        with (
+            patch("scanner.web.app.FRONTEND_MODE", "react"),
+            patch("scanner.web.app.FRONTEND_DIST_DIR", web_app.Path("D:/fake/react")),
+            patch.object(web_app.Path, "exists", return_value=False),
+            patch.object(web_app.Path, "is_file", return_value=False),
+        ):
+            resolved = web_app._resolve_dashboard_index_path()
+
+        self.assertEqual(str(resolved), str(web_app.STATIC_DIR / "index.html"))
 
 
 if __name__ == "__main__":

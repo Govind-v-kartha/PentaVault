@@ -19,12 +19,12 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -99,7 +99,15 @@ app.add_middleware(
 
 # Serve static files (HTML/CSS/JS)
 STATIC_DIR = _WEB_DIR / "static"
+FRONTEND_DIR = _WEB_DIR / "frontend"
+FRONTEND_DIST_DIR = FRONTEND_DIR / "dist"
+FRONTEND_MODE = (os.environ.get("PENTAVAULT_FRONTEND_MODE", "legacy") or "legacy").strip().lower()
+_FRONTEND_MODE_REACT = "react"
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+_FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+if _FRONTEND_ASSETS_DIR.exists() and _FRONTEND_ASSETS_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_ASSETS_DIR)), name="frontend_assets")
 
 # ── Vercel detection ────────────────────────────────────────────────
 _IS_VERCEL = bool(os.environ.get("VERCEL"))
@@ -750,11 +758,40 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
 # ── API Endpoints ──────────────────────────────────────────────────
 
+def _resolve_dashboard_index_path() -> Path:
+    if FRONTEND_MODE == _FRONTEND_MODE_REACT:
+        react_index = FRONTEND_DIST_DIR / "index.html"
+        if react_index.exists() and react_index.is_file():
+            return react_index
+        log.warning("PENTAVAULT_FRONTEND_MODE=react but frontend dist not found; falling back to legacy static index")
+    return STATIC_DIR / "index.html"
+
+
+def _frontend_mode_state() -> dict[str, Any]:
+    selected = FRONTEND_MODE if FRONTEND_MODE in {"legacy", _FRONTEND_MODE_REACT} else "legacy"
+    available = ["legacy"]
+    react_dist_ready = bool((FRONTEND_DIST_DIR / "index.html").exists() and (FRONTEND_DIST_DIR / "index.html").is_file())
+    if react_dist_ready:
+        available.append(_FRONTEND_MODE_REACT)
+    active = _FRONTEND_MODE_REACT if (selected == _FRONTEND_MODE_REACT and react_dist_ready) else "legacy"
+    return {
+        "selected_mode": selected,
+        "active_mode": active,
+        "react_dist_ready": react_dist_ready,
+        "available_modes": available,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Serve the main dashboard page."""
-    index_path = STATIC_DIR / "index.html"
-    return FileResponse(str(index_path))
+    return FileResponse(str(_resolve_dashboard_index_path()))
+
+
+@app.get("/api/frontend/mode")
+async def frontend_mode_info():
+    """Expose selected/active dashboard frontend mode for runtime diagnostics."""
+    return _frontend_mode_state()
 
 
 @app.post("/api/scan", response_model=dict)
@@ -979,6 +1016,136 @@ class MitreExplainRequest(BaseModel):
     question: str = ""
 
 
+def _stream_error_detail(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict) and {"code", "message", "retryable"}.issubset(detail.keys()):
+            return {
+                "code": str(detail.get("code", "AI_UPSTREAM_UNAVAILABLE")),
+                "message": str(detail.get("message", "AI request failed.")),
+                "retryable": bool(detail.get("retryable", True)),
+            }
+
+        if exc.status_code == 404:
+            return _ai_error_detail("SCAN_NOT_FOUND", "Scan not found.", False)
+
+        if exc.status_code == 400:
+            if isinstance(detail, dict):
+                errors = detail.get("errors")
+                if isinstance(errors, list) and errors:
+                    message = str(errors[0])
+                else:
+                    message = "Invalid AI request."
+            elif isinstance(detail, str) and detail.strip():
+                message = detail.strip()
+            else:
+                message = "Invalid AI request."
+            return _ai_error_detail("AI_REQUEST_INVALID", message, False)
+
+        return _ai_error_detail("AI_REQUEST_FAILED", "AI request failed.", exc.status_code >= 500)
+
+    try:
+        _raise_ai_endpoint_error(exc)
+    except HTTPException as mapped:
+        mapped_detail = mapped.detail
+        if isinstance(mapped_detail, dict) and {"code", "message", "retryable"}.issubset(mapped_detail.keys()):
+            return {
+                "code": str(mapped_detail["code"]),
+                "message": str(mapped_detail["message"]),
+                "retryable": bool(mapped_detail["retryable"]),
+            }
+
+    return _ai_error_detail(
+        "AI_UPSTREAM_UNAVAILABLE",
+        "AI service is temporarily unavailable. Please retry in a moment.",
+        True,
+    )
+
+
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    payload = json.dumps(data, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _chunk_text(text: str, chunk_size: int = 320) -> list[str]:
+    if not text:
+        return []
+
+    chunks: list[str] = []
+    start = 0
+    total_len = len(text)
+    while start < total_len:
+        end = min(start + chunk_size, total_len)
+        if end < total_len:
+            split_at = text.rfind(" ", start, end)
+            if split_at > start + 40:
+                end = split_at
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end
+        while start < total_len and text[start].isspace():
+            start += 1
+
+    return chunks
+
+
+def _ai_streaming_response(
+    *,
+    endpoint: str,
+    result_key: str,
+    compute: Callable[[], Any],
+) -> StreamingResponse:
+    async def _event_stream():
+        yield _sse_event(
+            "start",
+            {
+                "endpoint": endpoint,
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
+
+        try:
+            payload = await compute()
+            if not isinstance(payload, dict):
+                payload = {result_key: str(payload)}
+
+            text_value = payload.get(result_key, "")
+            if not isinstance(text_value, str):
+                text_value = str(text_value)
+
+            chunks = _chunk_text(text_value)
+            if chunks:
+                for idx, chunk in enumerate(chunks, start=1):
+                    yield _sse_event("delta", {"chunk": chunk, "index": idx, "total": len(chunks)})
+                    await asyncio.sleep(0)
+            else:
+                yield _sse_event("delta", {"chunk": "", "index": 1, "total": 1})
+
+            yield _sse_event("final", payload)
+        except Exception as exc:
+            yield _sse_event("error", _stream_error_detail(exc))
+
+        yield _sse_event(
+            "done",
+            {
+                "endpoint": endpoint,
+                "finished_at": datetime.now().isoformat(timespec="seconds"),
+            },
+        )
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/ai/analyze")
 async def ai_analyze(req: AIRequest):
     """Generate AI threat analysis for a completed scan."""
@@ -1005,6 +1172,16 @@ async def ai_analyze(req: AIRequest):
 
     _ai_cache_set(scan, cache_key, result)
     return {"analysis": result}
+
+
+@app.post("/api/ai/analyze/stream")
+async def ai_analyze_stream(req: AIRequest):
+    """Stream AI threat analysis in SSE format with sanitized error events."""
+
+    async def _compute() -> dict[str, Any]:
+        return await ai_analyze(req)
+
+    return _ai_streaming_response(endpoint="analyze", result_key="analysis", compute=_compute)
 
 
 @app.post("/api/ai/remediate")
@@ -1043,6 +1220,16 @@ async def ai_remediate(req: AIRequest):
     return {"remediation": result}
 
 
+@app.post("/api/ai/remediate/stream")
+async def ai_remediate_stream(req: AIRequest):
+    """Stream AI remediation guidance in SSE format with sanitized error events."""
+
+    async def _compute() -> dict[str, Any]:
+        return await ai_remediate(req)
+
+    return _ai_streaming_response(endpoint="remediate", result_key="remediation", compute=_compute)
+
+
 @app.post("/api/ai/executive-summary")
 async def ai_exec_summary(req: AIRequest):
     """Generate an AI-powered executive summary."""
@@ -1067,6 +1254,16 @@ async def ai_exec_summary(req: AIRequest):
     _ai_cache_set(scan, cache_key, result)
     scan["_ai_executive_summary"] = result
     return {"summary": result}
+
+
+@app.post("/api/ai/executive-summary/stream")
+async def ai_exec_summary_stream(req: AIRequest):
+    """Stream AI executive summary in SSE format with sanitized error events."""
+
+    async def _compute() -> dict[str, Any]:
+        return await ai_exec_summary(req)
+
+    return _ai_streaming_response(endpoint="executive-summary", result_key="summary", compute=_compute)
 
 
 @app.post("/api/ai/mitre-explain")
@@ -1109,6 +1306,16 @@ async def ai_mitre_explain_endpoint(req: MitreExplainRequest):
 
     _ai_cache_set(scan, cache_key, result)
     return {"explanation": result}
+
+
+@app.post("/api/ai/mitre-explain/stream")
+async def ai_mitre_explain_stream(req: MitreExplainRequest):
+    """Stream AI MITRE explanation in SSE format with sanitized error events."""
+
+    async def _compute() -> dict[str, Any]:
+        return await ai_mitre_explain_endpoint(req)
+
+    return _ai_streaming_response(endpoint="mitre-explain", result_key="explanation", compute=_compute)
 
 
 # ── Report Download Endpoints ──────────────────────────────────────
@@ -1192,10 +1399,13 @@ async def download_docx(scan_id: str):
 if __name__ == "__main__":
     import uvicorn
 
+    host = os.environ.get("PENTAVAULT_HOST", "127.0.0.1")
+    port = int(os.environ.get("PENTAVAULT_PORT", os.environ.get("PORT", "8000")))
+
     banner = (
         "\n  ╔══════════════════════════════════════════════════╗\n"
         "  ║  PentaVault — Web Dashboard                      ║\n"
-        "  ║  Open: http://127.0.0.1:8000                     ║\n"
+        f"  ║  Open: http://{host}:{port}                     ║\n"
         "  ╚══════════════════════════════════════════════════╝\n"
     )
     try:
@@ -1204,4 +1414,4 @@ if __name__ == "__main__":
         encoding = sys.stdout.encoding or "utf-8"
         print(banner.encode(encoding, errors="replace").decode(encoding, errors="replace"))
 
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")

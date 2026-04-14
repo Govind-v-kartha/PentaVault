@@ -136,11 +136,16 @@ c:\Project 1\
 │   │   └── pdf_report.py            # Professional PDF/DOCX report generation
 │   │
 │   ├── web/                         # Web Dashboard (FastAPI)
-│   │   ├── app.py                   # FastAPI application + REST API
-│   │   └── static/                  # Frontend assets
-│   │       ├── index.html           # Dashboard HTML (single-page app)
-│   │       ├── style.css            # SOC Obsidian design system CSS (glass panels, responsive rail/stage layout)
-│   │       └── app.js               # Interaction engine (scan lifecycle, AI actions, D3 + Three.js visual controllers)
+│   │   ├── app.py                   # FastAPI application + REST API (legacy/react frontend mode switch + SSE AI streams)
+│   │   ├── static/                  # Legacy frontend assets (SOC Obsidian static SPA)
+│   │   │   ├── index.html           # Legacy dashboard HTML
+│   │   │   ├── style.css            # Legacy design system CSS
+│   │   │   └── app.js               # Legacy interaction engine
+│   │   └── frontend/                # React+Vite migration shell
+│   │       ├── package.json         # Frontend dependencies and scripts
+│   │       ├── vite.config.js       # Vite config + backend API proxy
+│   │       ├── tailwind.config.js   # Tailwind theme tokens
+│   │       └── src/                 # React app, API client, feature panels
 │   │
 │   ├── reports/                     # Auto-created: JSON report output
 │   ├── data/                        # Auto-created: persistent scan history
@@ -856,6 +861,10 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Response**: Full scan state including progress, current_stage, stages, elapsed, findings, summary, error, plus additive `runtime_config` and `execution_metadata`
 - **Used For**: Polling during scan and showing effective runtime behavior settings in UI
 
+### `GET /api/frontend/mode`
+- **Response**: `{ selected_mode, active_mode, react_dist_ready, available_modes }`
+- **Purpose**: Runtime diagnostics for legacy/static vs React frontend selection
+
 ### `GET /api/scan/{scan_id}/findings`
 - **Response**: `{ findings: [...] }`
 
@@ -892,11 +901,23 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Behavior**: Generates threat analysis from scan findings + MITRE coverage; uses deterministic per-scan cache key to avoid duplicate model calls for identical scan state
 - **Error contract**: On failure returns structured FastAPI `detail` object `{ code, message, retryable }` with sanitized, user-safe messages
 
+### `POST /api/ai/analyze/stream`
+- **Body**: `{ scan_id }`
+- **Response**: `text/event-stream` with events `start`, `delta`, `final`, `error`, `done`
+- **Behavior**: Reuses analyze endpoint logic and cache; emits incremental chunks plus final payload
+- **Error contract**: Stream `error` event returns sanitized `{code,message,retryable}` payload
+
 ### `POST /api/ai/remediate`
 - **Body**: `{ scan_id, finding_index }`
 - **Response (success)**: `{ remediation: "..." }`
 - **Behavior**: Generates per-finding remediation guidance; cache key includes finding index + finding payload signature
 - **Error contract**: Uses the same structured/sanitized AI error `detail` object
+
+### `POST /api/ai/remediate/stream`
+- **Body**: `{ scan_id, finding_index }`
+- **Response**: `text/event-stream` with events `start`, `delta`, `final`, `error`, `done`
+- **Behavior**: Reuses remediate endpoint logic and cache; emits incremental chunks plus final payload
+- **Error contract**: Stream `error` event returns sanitized `{code,message,retryable}` payload
 
 ### `POST /api/ai/executive-summary`
 - **Body**: `{ scan_id }`
@@ -904,11 +925,23 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 - **Behavior**: Generates executive summary and caches it; also stores in `scan["_ai_executive_summary"]` for PDF/DOCX reuse
 - **Error contract**: Uses the same structured/sanitized AI error `detail` object
 
+### `POST /api/ai/executive-summary/stream`
+- **Body**: `{ scan_id }`
+- **Response**: `text/event-stream` with events `start`, `delta`, `final`, `error`, `done`
+- **Behavior**: Reuses executive summary endpoint logic and cache; emits incremental chunks plus final payload
+- **Error contract**: Stream `error` event returns sanitized `{code,message,retryable}` payload
+
 ### `POST /api/ai/mitre-explain`
 - **Body**: `{ scan_id, technique_id, technique_name, tactic, question }`
 - **Response (success)**: `{ explanation: "..." }`
 - **Behavior**: Generates MITRE technique explainer in scan context; cache key includes normalized question text and findings signature
 - **Error contract**: Uses the same structured/sanitized AI error `detail` object
+
+### `POST /api/ai/mitre-explain/stream`
+- **Body**: `{ scan_id, technique_id, technique_name, tactic, question }`
+- **Response**: `text/event-stream` with events `start`, `delta`, `final`, `error`, `done`
+- **Behavior**: Reuses MITRE explain endpoint logic and cache; emits incremental chunks plus final payload
+- **Error contract**: Stream `error` event returns sanitized `{code,message,retryable}` payload
 
 ---
 
@@ -957,10 +990,12 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 | `scanner/utils/logger.py` | ~50 | Logging setup |
 | `scanner/utils/report_exporter.py` | ~200 | Report generation |
 | `scanner/utils/mitre_mapping.py` | ~800 | MITRE ATT&CK mapping engine |
-| `scanner/web/app.py` | ~515 | FastAPI backend |
-| `scanner/web/static/index.html` | ~245 | Dashboard HTML |
-| `scanner/web/static/style.css` | ~1900 | SOC Obsidian design system CSS (rail/stage layout, glass cards, responsive + motion fallback) |
-| `scanner/web/static/app.js` | ~3000 | Frontend interaction engine (scan lifecycle, AI UX, D3 + Three.js scene controllers) |
+| `scanner/web/app.py` | ~1450 | FastAPI backend (legacy/react mode routing + SSE AI stream endpoints) |
+| `scanner/web/static/index.html` | ~245 | Legacy dashboard HTML |
+| `scanner/web/static/style.css` | ~1900 | Legacy SOC Obsidian design system CSS |
+| `scanner/web/static/app.js` | ~3000 | Legacy frontend interaction engine |
+| `scanner/web/frontend/src/App.jsx` | ~500 | React migration dashboard shell (scan/history/results/mapping panels) |
+| `scanner/web/frontend/src/api/client.js` | ~300 | Frontend API + SSE stream client adapters |
 
 ---
 
@@ -1004,6 +1039,8 @@ Selenium browser modules could hang indefinitely, causing the scan to freeze at 
 8. **Authentication**: No dashboard authentication — anyone with network access to port 8000 can run scans.
 9. **Evidence Storage**: Screenshots stored on disk with no auto-cleanup.
 10. **Legal**: Tool is for authorized security testing only. Unauthorized use is illegal.
+11. **Frontend npm workflow**: Running frontend install commands from repo root with `npm --prefix scanner/web/frontend` can inject root package file-links into `scanner/web/frontend/package.json`; run installs from inside `scanner/web/frontend` (`cd scanner/web/frontend && npm install`) to keep frontend dependencies clean.
+12. **One-command product launch**: Root npm scripts now orchestrate full product preparation/startup (`product:setup`, `product:build`, `product:start`, `product`) so end-to-end run can be triggered from a single npm command.
 
 ---
 

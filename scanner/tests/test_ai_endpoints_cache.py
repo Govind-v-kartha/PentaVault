@@ -143,6 +143,36 @@ class TestAiEndpointCaching(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["analysis"], "ok")
         self.assertEqual(mocked_ai.call_count, 2)
 
+    async def test_analyze_stream_uses_same_cache_path(self):
+        req = web_app.AIRequest(scan_id=self.scan_id)
+        with (
+            patch("scanner.web.app._require_gemini_api_keys", return_value=["k"]),
+            patch("scanner.web.app.build_mitre_breakdown", return_value=[{"tactic": "Execution"}]),
+            patch("scanner.web.app.compute_matrix_coverage", return_value={"tactics_with_hits": 1, "total_tactics": 14, "total_technique_hits": 1}),
+            patch("scanner.web.app.ai_threat_analysis", return_value="stream-cache-analysis") as mocked_ai,
+        ):
+            response = await web_app.ai_analyze_stream(req)
+            async for _ in response.body_iterator:
+                pass
+            second = await web_app.ai_analyze(req)
+
+        self.assertEqual(second["analysis"], "stream-cache-analysis")
+        self.assertEqual(mocked_ai.call_count, 1)
+
+    async def test_exec_summary_stream_populates_report_summary_cache(self):
+        req = web_app.AIRequest(scan_id=self.scan_id)
+        with (
+            patch("scanner.web.app._require_gemini_api_keys", return_value=["k"]),
+            patch("scanner.web.app.ai_executive_summary", return_value="streamed-summary") as mocked_exec,
+        ):
+            response = await web_app.ai_exec_summary_stream(req)
+            async for _ in response.body_iterator:
+                pass
+            cached = web_app.scans[self.scan_id].get("_ai_executive_summary")
+
+        self.assertEqual(cached, "streamed-summary")
+        self.assertEqual(mocked_exec.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

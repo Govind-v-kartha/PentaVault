@@ -147,3 +147,55 @@
     - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 116 tests, OK
   - JS syntax check:
     - `node --check scanner/web/static/app.js` → OK
+
+- React migration + streaming foundation (in progress):
+  - Backend:
+    - Added frontend mode diagnostics + dual-index selection:
+      - `GET /api/frontend/mode`
+      - root `/` now resolves legacy static index or React dist index based on `PENTAVAULT_FRONTEND_MODE` + dist availability.
+    - Added additive SSE AI endpoints (kept existing POST JSON endpoints unchanged):
+      - `/api/ai/analyze/stream`
+      - `/api/ai/remediate/stream`
+      - `/api/ai/executive-summary/stream`
+      - `/api/ai/mitre-explain/stream`
+    - SSE stream emits `start`, `delta`, `final`, `error`, `done` events with sanitized error payloads.
+  - Frontend scaffold:
+    - Added `scanner/web/frontend/` Vite + React + Tailwind + Recharts scaffold.
+    - Added typed API client covering existing scan/history/mapping/AI contracts plus stream consumer utility.
+    - Added initial React shell for scan launch/status polling/history/results + AI actions.
+  - Added contract regression coverage:
+    - Extended AI error tests with SSE sanitization and stream event assertions.
+    - Extended AI cache tests for stream/non-stream cache parity.
+    - Extended runtime metadata tests with frontend mode and root index-resolution assertions.
+  - Validation + dependency hygiene pass:
+    - Root cause isolated: running npm from repo root with `--prefix scanner/web/frontend` can inject a local file dependency from root package (`project-1`).
+    - Stabilized workflow: run frontend dependency commands from inside `scanner/web/frontend` (`cd scanner/web/frontend && npm install`) to prevent root package self-link injection.
+    - Final manifest/lockfile state now contains only intended frontend runtime deps (`react`, `react-dom`, `recharts`) plus dev/test deps.
+  - Targeted verification:
+    - `python -m unittest scanner.tests.test_ai_engine_config_and_fallback scanner.tests.test_ai_error_contract scanner.tests.test_ai_endpoints_cache scanner.tests.test_scan_runtime_metadata scanner.tests.test_mitre_endpoint_cache` → Ran 34 tests, OK
+    - `npm --prefix scanner/web/frontend run test` → 1 test passed, OK
+    - `npm --prefix scanner/web/frontend run build` → build OK (chunk-size warning only).
+    - `python -m unittest discover -s scanner/tests -p "test_*.py"` → Ran 124 tests, OK
+  - Audit status:
+    - `cd scanner/web/frontend && npm audit --json` reports 6 moderate advisories (current tree); fixes require major upgrades (not applied in this pass).
+
+- Deployment path hardening (Vercel):
+  - Updated `vercel.json` from legacy `builds/routes` to modern config with explicit frontend build + artifact output:
+    - `buildCommand`: `cd scanner/web/frontend && npm ci && npm run build`
+    - `outputDirectory`: `scanner/web/frontend/dist`
+    - `functions`: `api/index.py`
+    - `rewrites`: preserve API/static/evidence routing to FastAPI fallback.
+  - Verification:
+    - `cd scanner/web/frontend && npm run build` → OK
+    - `python -m unittest scanner.tests.test_scan_runtime_metadata` → Ran 6 tests, OK
+
+- End-product runner scripts (root npm):
+  - Added root scripts in `package.json`:
+    - `product:setup` → installs Python scanner deps + frontend npm deps
+    - `product:build` → builds React frontend dist
+    - `product:start` → starts FastAPI with `PENTAVAULT_FRONTEND_MODE=react`
+    - `product` → chained setup + build + start
+  - Verification:
+    - `npm run product:setup` → OK
+    - `npm run product:build` → OK
+    - `python -m unittest scanner.tests.test_scan_runtime_metadata` → Ran 6 tests, OK

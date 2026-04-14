@@ -4,7 +4,11 @@
   "description": "<p align=\"center\">\r   <img src=\"https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white\" />\r   <img src=\"https://img.shields.io/badge/FastAPI-0.111+-009688?logo=fastapi&logoColor=white\" />\r   <img src=\"https://img.shields.io/badge/Selenium-4.20+-43B02A?logo=selenium&logoColor=white\" />\r   <img src=\"https://img.shields.io/badge/License-Proprietary-red\" />\r </p>",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "product:setup": "python -m pip install -r scanner/requirements.txt && cd scanner/web/frontend && npm ci",
+    "product:build": "cd scanner/web/frontend && npm run build",
+    "product:start": "python -c \"import os,runpy; from dotenv import load_dotenv; load_dotenv('.env'); os.environ['PENTAVAULT_FRONTEND_MODE']='react'; runpy.run_module('scanner.web.app', run_name='__main__')\"",
+    "product": "npm run product:setup && npm run product:build && npm run product:start"
   },
   "repository": {
     "type": "git",

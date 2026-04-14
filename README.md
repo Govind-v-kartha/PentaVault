@@ -130,11 +130,42 @@ npm install
 # Windows PowerShell examples:
 #   $env:PENTAVAULT_GEMINI_API_KEYS="key1,key2"
 #   $env:PENTAVAULT_GEMINI_MODELS="gemini-2.0-flash,gemini-1.5-flash"
+#   $env:PENTAVAULT_FRONTEND_MODE="legacy"   # or "react" once scanner/web/frontend/dist exists
 # Or create a .env file in the project root with:
 #   PENTAVAULT_GEMINI_API_KEYS=key1,key2
 #   PENTAVAULT_GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash
 #   GEMINI_API_KEY=single_fallback_key
+#   PENTAVAULT_FRONTEND_MODE=legacy
 ```
+
+### One-command product run (React frontend + API)
+
+```bash
+# from repo root (installs Python + frontend deps, builds React dist, starts API in react mode)
+npm run product
+```
+
+### Product scripts (repo root)
+
+```bash
+npm run product:setup   # install scanner Python deps + frontend npm deps
+npm run product:build   # build scanner/web/frontend/dist
+npm run product:start   # start FastAPI with PENTAVAULT_FRONTEND_MODE=react
+```
+
+### React Frontend (migration shell)
+
+```bash
+# from repo root
+cd scanner/web/frontend
+npm install
+npm run build
+
+# optional local dev server with API proxy
+npm run dev
+```
+
+After build, set `PENTAVAULT_FRONTEND_MODE=react` to serve `scanner/web/frontend/dist/index.html` at `/`.
 
 ---
 
@@ -254,7 +285,8 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/` | Dashboard page |
+| `GET` | `/` | Dashboard page (legacy static or React dist based on `PENTAVAULT_FRONTEND_MODE`) |
+| `GET` | `/api/frontend/mode` | Frontend mode diagnostics (`selected_mode`, `active_mode`, `react_dist_ready`) |
 | `POST` | `/api/scan` | Start a new scan (includes dependency preflight) |
 | `GET` | `/api/scan/{id}` | Get scan status/results |
 | `GET` | `/api/scan/{id}/findings` | Get findings only |
@@ -267,9 +299,13 @@ All findings are categorised against the **OWASP Top 10:2025** framework:
 | `GET` | `/api/mitre/tactics` | All 14 ATT&CK tactics |
 | `GET` | `/api/evidence/{filename}` | Serve screenshot evidence |
 | `POST` | `/api/ai/analyze` | AI threat analysis for a scan |
+| `POST` | `/api/ai/analyze/stream` | SSE stream for incremental AI threat analysis events |
 | `POST` | `/api/ai/remediate` | AI remediation for a specific finding |
+| `POST` | `/api/ai/remediate/stream` | SSE stream for incremental AI remediation events |
 | `POST` | `/api/ai/executive-summary` | AI-powered executive summary |
+| `POST` | `/api/ai/executive-summary/stream` | SSE stream for incremental AI executive summary events |
 | `POST` | `/api/ai/mitre-explain` | AI technique explainer with personalized Q&A |
+| `POST` | `/api/ai/mitre-explain/stream` | SSE stream for incremental MITRE explainer events |
 | `GET` | `/api/scan/{id}/report/pdf` | Download professional PDF report |
 | `GET` | `/api/scan/{id}/report/docx` | Download DOCX report (Node.js preflight required) |
 

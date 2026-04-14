@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import datetime
 from unittest.mock import patch
@@ -100,6 +101,56 @@ class TestAiErrorContract(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(exc_info.exception.status_code, 502)
         self.assertEqual(exc_info.exception.detail, detail)
+
+    async def test_stream_error_event_sanitizes_sensitive_upstream_message(self):
+        req = web_app.AIRequest(scan_id=self.scan_id)
+        with (
+            patch("scanner.web.app._require_gemini_api_keys", return_value=["k"]),
+            patch("scanner.web.app.build_mitre_breakdown", return_value=[]),
+            patch("scanner.web.app.compute_matrix_coverage", return_value={"tactics_with_hits": 0, "total_tactics": 14, "total_technique_hits": 0}),
+            patch("scanner.web.app.ai_threat_analysis", side_effect=RuntimeError("All API keys/models exhausted: HTTP 429 (key ...abc123, model gemini-2.0-flash)")),
+        ):
+            response = await web_app.ai_analyze_stream(req)
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+            payload = "".join(chunks)
+
+        self.assertIn("event: error", payload)
+        self.assertNotIn("abc123", payload)
+        self.assertNotIn("Gemini", payload)
+        self.assertIn("AI_UPSTREAM_UNAVAILABLE", payload)
+
+    async def test_stream_emits_final_payload_for_cached_analyze(self):
+        req = web_app.AIRequest(scan_id=self.scan_id)
+        with (
+            patch("scanner.web.app._require_gemini_api_keys", return_value=["k"]),
+            patch("scanner.web.app.build_mitre_breakdown", return_value=[]),
+            patch("scanner.web.app.compute_matrix_coverage", return_value={"tactics_with_hits": 0, "total_tactics": 14, "total_technique_hits": 0}),
+            patch("scanner.web.app.ai_threat_analysis", return_value="analysis-output"),
+        ):
+            response = await web_app.ai_analyze_stream(req)
+            events = []
+            async for chunk in response.body_iterator:
+                text = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+                events.append(text)
+            payload = "".join(events)
+
+        self.assertIn("event: start", payload)
+        self.assertIn("event: final", payload)
+        self.assertIn('"analysis": "analysis-output"', payload)
+        self.assertIn("event: done", payload)
+
+    async def test_stream_emits_scan_not_found_error_code(self):
+        req = web_app.AIRequest(scan_id="missing-scan")
+        response = await web_app.ai_analyze_stream(req)
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+        payload = "".join(chunks)
+
+        self.assertIn("event: error", payload)
+        self.assertIn("SCAN_NOT_FOUND", payload)
 
 
 if __name__ == "__main__":

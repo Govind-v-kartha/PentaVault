@@ -206,6 +206,9 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
         key_suffix = state.key_suffix
         key_attempted.add(key)
 
+        saw_quota_or_rate_limit = False
+        saw_transient_failure = False
+
         for model in models:
             url = f"{_GEMINI_BASE}/{model}:generateContent"
             try:
@@ -234,18 +237,18 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
                 attempts.append(f"HTTP {status} (key {key_suffix}, model {model})")
 
                 if status in _RATE_LIMIT_STATUSES:
-                    _KEY_POOL.mark_quota_or_rate_limited(key)
-                    break
+                    saw_quota_or_rate_limit = True
+                    continue
                 if status in _TRANSIENT_STATUSES:
-                    _KEY_POOL.mark_transient_failure(key)
-                    break
+                    saw_transient_failure = True
+                    continue
                 if status in _INVALID_KEY_STATUSES:
                     _KEY_POOL.mark_invalid_key(key)
                     break
                 if status in _POTENTIALLY_QUOTA_STATUSES:
                     if _classify_403(exc) == "quota":
-                        _KEY_POOL.mark_quota_or_rate_limited(key)
-                        break
+                        saw_quota_or_rate_limit = True
+                        continue
                     _KEY_POOL.mark_invalid_key(key)
                     break
                 if _retry_model_only(status):
@@ -253,8 +256,13 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
                 raise
             except httpx.RequestError as exc:
                 attempts.append(f"Request error {exc.__class__.__name__} (key {key_suffix}, model {model})")
-                _KEY_POOL.mark_transient_failure(key)
-                break
+                saw_transient_failure = True
+                continue
+
+        if saw_quota_or_rate_limit:
+            _KEY_POOL.mark_quota_or_rate_limited(key)
+        elif saw_transient_failure:
+            _KEY_POOL.mark_transient_failure(key)
 
     attempts_text = "; ".join(attempts[-8:]) if attempts else "unknown error"
     raise RuntimeError(f"All API keys/models exhausted: {attempts_text}")

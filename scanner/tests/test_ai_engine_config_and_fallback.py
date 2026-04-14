@@ -71,7 +71,7 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
             response.json.return_value = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
             return response
 
-        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash"]), patch(
+        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
             side_effect=[make_success("first"), make_success("second")],
         ) as mock_post:
@@ -98,7 +98,7 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         ok.raise_for_status.return_value = None
         ok.json.return_value = {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
 
-        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash"]), patch(
+        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
             side_effect=[unauthorized, ok],
         ):
@@ -123,9 +123,9 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         ok.raise_for_status.return_value = None
         ok.json.return_value = {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
 
-        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash"]), patch(
+        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, ok],
+            side_effect=[rate_limited, rate_limited, ok],
         ):
             result = ai_engine._call_gemini(["k1", "k2"], "prompt")
 
@@ -152,19 +152,20 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         ok_two.raise_for_status.return_value = None
         ok_two.json.return_value = {"candidates": [{"content": {"parts": [{"text": "second"}]}}]}
 
-        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash"]), patch(
+        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, ok_one, ok_two],
+            side_effect=[rate_limited, rate_limited, ok_one, ok_two],
         ) as mock_post:
             first = ai_engine._call_gemini(["k1", "k2"], "prompt")
             second = ai_engine._call_gemini(["k1", "k2"], "prompt")
 
         self.assertEqual(first, "first")
         self.assertEqual(second, "second")
-        self.assertEqual(mock_post.call_count, 3)
+        self.assertEqual(mock_post.call_count, 4)
         self.assertEqual(mock_post.call_args_list[0].kwargs["params"]["key"], "k1")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k2")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k1")
         self.assertEqual(mock_post.call_args_list[2].kwargs["params"]["key"], "k2")
+        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k2")
 
     def test_call_gemini_reuses_key_after_cooldown_expires(self):
         req = httpx.Request("POST", "https://example.com")
@@ -188,9 +189,9 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         ok_c.raise_for_status.return_value = None
         ok_c.json.return_value = {"candidates": [{"content": {"parts": [{"text": "c"}]}}]}
 
-        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash"]), patch(
+        with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, ok_a, ok_b, ok_c],
+            side_effect=[rate_limited, rate_limited, ok_a, ok_b, ok_c],
         ) as mock_post:
             first = ai_engine._call_gemini(["k1", "k2"], "prompt")
             second = ai_engine._call_gemini(["k1", "k2"], "prompt")
@@ -202,11 +203,12 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         self.assertEqual(first, "a")
         self.assertEqual(second, "b")
         self.assertEqual(third, "c")
-        self.assertEqual(mock_post.call_count, 4)
+        self.assertEqual(mock_post.call_count, 5)
         self.assertEqual(mock_post.call_args_list[0].kwargs["params"]["key"], "k1")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k2")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k1")
         self.assertEqual(mock_post.call_args_list[2].kwargs["params"]["key"], "k2")
-        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k1")
+        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k2")
+        self.assertEqual(mock_post.call_args_list[4].kwargs["params"]["key"], "k1")
 
     def test_public_prompt_functions_use_expected_token_limits(self):
         scan = {"target": "https://example.com", "mode": "quick"}
