@@ -67,17 +67,14 @@ export default function ResultsPage() {
     const msg = e.message || String(e);
     const detail = e.detail || {};
     const code = detail.code || '';
-    const retryable = detail.retryable !== false;
 
     if (code === 'AI_CONFIG_MISSING' || msg.includes('not configured'))
-      return `<div class="ai-error ai-error--config"><strong>AI Not Configured</strong><p>No API keys found. Add your Gemini API keys to the <code>.env</code> file and restart the server.</p></div>`;
+      return `<div class="ai-error ai-error--config"><strong>AI Unavailable</strong><p>The AI analysis service has not been set up yet. Please contact your administrator.</p></div>`;
 
     if (code === 'AI_UPSTREAM_UNAVAILABLE' || msg.includes('unavailable') || msg.includes('retry') || msg.includes('502') || msg.includes('exhausted') || msg.includes('rate'))
-      return `<div class="ai-error ai-error--quota"><strong>AI Rate Limited</strong><p>All API keys have reached their quota. The free tier resets daily — please try again later or add additional API keys.</p></div>`;
+      return `<div class="ai-error ai-error--quota"><strong>AI Temporarily Unavailable</strong><p>The analysis service is currently busy. Please try again in a few minutes.</p></div>`;
 
-    // Generic / unknown
-    const safeMsg = msg.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
-    return `<div class="ai-error"><strong>Analysis Failed</strong><p>${safeMsg}</p>${retryable ? '<p class="ai-error-hint">This may be a temporary issue — try again in a moment.</p>' : ''}</div>`;
+    return `<div class="ai-error"><strong>Analysis Unavailable</strong><p>Something went wrong while generating the analysis. Please try again shortly.</p></div>`;
   }
 
   async function runAiAnalysis() {
