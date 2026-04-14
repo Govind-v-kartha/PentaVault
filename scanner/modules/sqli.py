@@ -393,12 +393,16 @@ def test_sqli(
     return findings
 
 
-def _to_finding(raw: dict[str, Any]) -> dict[str, Any]:
+def _to_finding(raw: dict[str, Any], auth_required: bool = False) -> dict[str, Any]:
+    from scanner.core.cvss_builder import build_finding_cvss
+    vector, score, severity = build_finding_cvss("sqli", context={
+        "auth_required": auth_required,
+    })
     return {
         "title": f"SQL Injection ({raw['type']}) on {urlparse(raw['url']).path}",
-        "severity": "Critical",
-        "cvss_score": 9.8,
-        "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+        "severity": severity,
+        "cvss_score": score,
+        "cvss_vector": vector,
         "affected_url": raw["url"],
         "parameter": raw["parameter"],
         "payload": raw["payload"],

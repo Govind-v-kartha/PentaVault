@@ -55,17 +55,10 @@ ENCODED_PAYLOADS = [
     '<img src=x onerror=window["al"+"ert"](1)>',
 ]
 
-# DOM-based dangerous sinks in JavaScript
-_DOM_SINKS = re.compile(
-    r"(document\.write|\.innerHTML\s*=|\.outerHTML\s*=|eval\(|setTimeout\(|"
-    r"setInterval\(|document\.location|window\.location\s*=|\.src\s*=)",
-    re.IGNORECASE,
-)
-_DOM_SOURCES = re.compile(
-    r"(document\.URL|document\.referrer|location\.hash|location\.search|"
-    r"location\.href|window\.name)",
-    re.IGNORECASE,
-)
+# DOM-based XSS detection removed from HTTP module — static source-to-sink
+# regex matching produces unacceptable false positive rates on modern web apps
+# (React, jQuery, charting libraries all use innerHTML/document.write).
+# DOM XSS is properly tested in xss_selenium.py via actual browser execution.
 
 
 def _inject_param(url: str, param: str, payload: str) -> str:
@@ -138,22 +131,7 @@ def _test_stored(
     return None
 
 
-def _test_dom_based(body: str, url: str) -> list[dict[str, Any]]:
-    """Analyze page JavaScript for DOM-based XSS patterns (source → sink)."""
-    findings: list[dict[str, Any]] = []
-    sinks = _DOM_SINKS.findall(body)
-    sources = _DOM_SOURCES.findall(body)
-    if sinks and sources:
-        log.info("[XSS] DOM-based potential on %s (sinks=%d, sources=%d)",
-                 url, len(sinks), len(sources))
-        findings.append({
-            "xss_type": "DOM-based",
-            "parameter": "N/A",
-            "payload": "N/A (source-to-sink analysis)",
-            "evidence": f"Sources: {sources[:3]}, Sinks: {sinks[:3]}",
-            "url": url,
-        })
-    return findings
+
 
 
 def _snippet(body: str, marker: str, context: int = 80) -> str:
@@ -210,23 +188,8 @@ def test_xss(
                     findings.append(_to_finding(result))
                     seen.add(sig)
 
-        # ── DOM-based XSS analysis ──────────────────────────────────
-        visited: set[str] = set()
-        dom_limit = 10 if quick else len(test_endpoints)
-        for url in test_endpoints[:dom_limit]:
-            if should_stop and should_stop():
-                log.info("XSS scan cancelled during DOM analysis")
-                break
-            base = urlparse(url)._replace(query="", fragment="").geturl()
-            if base in visited:
-                continue
-            visited.add(base)
-            try:
-                resp = client.get(url)
-                for dom_finding in _test_dom_based(resp.text, url):
-                    findings.append(_to_finding(dom_finding))
-            except httpx.HTTPError:
-                continue
+        # DOM-based XSS: handled by xss_selenium.py (browser execution)
+        # Static source-to-sink analysis removed — false positive rate too high
 
         # ── Stored XSS via forms ────────────────────────────────────
         for form in test_forms:
@@ -244,13 +207,10 @@ def test_xss(
 
 
 def _to_finding(raw: dict[str, Any]) -> dict[str, Any]:
+    from scanner.core.cvss_builder import build_finding_cvss
     xss_type = raw["xss_type"]
-    if xss_type == "Stored":
-        severity, score, vector = "High", 6.1, "AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-    elif xss_type == "DOM-based":
-        severity, score, vector = "Medium", 6.1, "AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
-    else:
-        severity, score, vector = "Medium", 6.1, "AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+    type_map = {"Stored": "xss_stored", "DOM-based": "xss_dom", "Reflected": "xss_reflected"}
+    vector, score, severity = build_finding_cvss(type_map.get(xss_type, "xss_reflected"))
 
     return {
         "title": f"{xss_type} XSS on {urlparse(raw['url']).path}",

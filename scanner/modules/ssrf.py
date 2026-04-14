@@ -195,14 +195,15 @@ def test_ssrf(
 
 
 def _to_finding(url: str, param: str, payload: str, evidence: str) -> dict[str, Any]:
+    from scanner.core.cvss_builder import build_finding_cvss
     is_cloud = "169.254.169.254" in payload or "metadata" in payload.lower()
+    vuln_type = "ssrf_cloud" if is_cloud else "ssrf_internal"
+    vector, score, severity = build_finding_cvss(vuln_type)
     return {
         "title": f"SSRF on {urlparse(url).path} ({'Cloud Metadata' if is_cloud else 'Internal'})",
-        "severity": "High" if is_cloud else "Medium",
-        "cvss_score": 9.1 if is_cloud else 6.5,
-        "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
-        if is_cloud
-        else "AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+        "severity": severity,
+        "cvss_score": score,
+        "cvss_vector": vector,
         "affected_url": url,
         "parameter": param,
         "payload": payload,
