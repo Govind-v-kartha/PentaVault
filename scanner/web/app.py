@@ -233,6 +233,10 @@ def _raise_ai_endpoint_error(exc: Exception) -> None:
 def _require_gemini_api_keys() -> list[str]:
     keys = load_gemini_api_keys()
     if not keys:
+        # Retry after reloading .env in case keys were added after server start
+        load_dotenv(_PROJECT_DIR / ".env", override=True)
+        keys = load_gemini_api_keys()
+    if not keys:
         _raise_ai_config_error()
     return keys
 
@@ -475,18 +479,32 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             should_stop = lambda: bool(scan.get("_cancel"))
 
             if crawl_mode == "selenium":
-                from scanner.core.selenium_crawler import selenium_crawl
+                try:
+                    from scanner.core.selenium_crawler import selenium_crawl
 
-                crawl_result = selenium_crawl(
-                    url,
-                    max_depth=max_depth,
-                    max_pages=max_pages,
-                    cookie=req.cookie,
-                    headless=True,
-                    should_stop=should_stop,
-                    request_delay=req.request_delay,
-                )
-                crawler_label = "Selenium Crawler"
+                    crawl_result = selenium_crawl(
+                        url,
+                        max_depth=max_depth,
+                        max_pages=max_pages,
+                        cookie=req.cookie,
+                        headless=True,
+                        should_stop=should_stop,
+                        request_delay=req.request_delay,
+                    )
+                    crawler_label = "Selenium Crawler"
+                except Exception as exc:
+                    log.warning("[%s] Selenium crawl failed (%s), falling back to httpx crawler", scan_id[:8], exc)
+                    crawl_result = crawl(
+                        url,
+                        max_depth=max_depth,
+                        max_pages=max_pages,
+                        cookie=req.cookie,
+                        timeout=req.timeout,
+                        respect_robots=(req.mode == "quick"),
+                        should_stop=should_stop,
+                        request_delay=req.request_delay,
+                    )
+                    crawler_label = "Crawler (Selenium fallback)"
             elif crawl_mode == "hybrid":
                 from scanner.core.selenium_crawler import selenium_crawl
 
@@ -502,17 +520,22 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 )
                 needs_fallback = len(primary.endpoints) < 5 or len(primary.forms) < 1
                 if needs_fallback and not should_stop():
-                    fallback = selenium_crawl(
-                        url,
-                        max_depth=max_depth,
-                        max_pages=max_pages,
-                        cookie=req.cookie,
-                        headless=True,
-                        should_stop=should_stop,
-                        request_delay=req.request_delay,
-                    )
-                    crawl_result = _merge_crawl_results(primary, fallback)
-                    crawler_label = "Hybrid Crawler"
+                    try:
+                        fallback = selenium_crawl(
+                            url,
+                            max_depth=max_depth,
+                            max_pages=max_pages,
+                            cookie=req.cookie,
+                            headless=True,
+                            should_stop=should_stop,
+                            request_delay=req.request_delay,
+                        )
+                        crawl_result = _merge_crawl_results(primary, fallback)
+                        crawler_label = "Hybrid Crawler"
+                    except Exception as exc:
+                        log.warning("[%s] Selenium fallback failed (%s), using httpx results only", scan_id[:8], exc)
+                        crawl_result = primary
+                        crawler_label = "Crawler (Hybrid/Selenium unavailable)"
                 else:
                     crawl_result = primary
                     crawler_label = "Crawler"
@@ -885,11 +908,84 @@ async def get_findings(scan_id: str):
     return {"findings": scans[scan_id].get("findings", [])}
 
 
+@app.get("/api/scan/{scan_id}/stream")
+async def scan_progress_stream(scan_id: str):
+    """SSE stream for real-time scan progress updates."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    async def _progress_events():
+        last_progress = -1
+        last_findings_count = 0
+        last_stage_count = 0
+        while True:
+            if scan_id not in scans:
+                break
+            scan = scans[scan_id]
+            progress = scan.get("progress", 0)
+            findings = scan.get("findings", [])
+            stages = scan.get("stages", [])
+            status = scan.get("status", "running")
+
+            # Send progress update if changed
+            if progress != last_progress or len(findings) != last_findings_count:
+                evt_data = {
+                    "event": "progress",
+                    "progress": progress,
+                    "current_stage": scan.get("current_stage", ""),
+                    "findings_count": len(findings),
+                    "elapsed": _current_elapsed(scan),
+                    "status": status,
+                    "stages": stages,
+                    "module_results": scan.get("module_results", {}),
+                }
+                yield f"data: {json.dumps(evt_data, default=str)}\n\n"
+                last_progress = progress
+
+            # Send new findings
+            if len(findings) > last_findings_count:
+                for f in findings[last_findings_count:]:
+                    fd = {"event": "finding", "finding": f}
+                    yield f"data: {json.dumps(fd, default=str)}\n\n"
+                last_findings_count = len(findings)
+
+            # Send new completed stages
+            if len(stages) > last_stage_count:
+                for st in stages[last_stage_count:]:
+                    sd = {"event": "stage_complete", "stage": st}
+                    yield f"data: {json.dumps(sd, default=str)}\n\n"
+                last_stage_count = len(stages)
+
+            # Terminal states
+            if status in ("completed", "failed", "cancelled"):
+                done_evt = {
+                    "event": "complete" if status == "completed" else status,
+                    "status": status,
+                    "elapsed": _current_elapsed(scan),
+                    "findings_count": len(findings),
+                }
+                yield f"data: {json.dumps(done_evt, default=str)}\n\n"
+                break
+
+            await asyncio.sleep(0.8)
+
+    return StreamingResponse(
+        _progress_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/scans")
 async def list_scans():
     """List all scans (recent first)."""
     result = []
     for sid, s in sorted(scans.items(), key=lambda x: x[1]["started_at"], reverse=True):
+        # Build severity counts
+        sev_counts = {}
+        for f in s.get("findings", []):
+            sev = f.get("severity", "Info")
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
         result.append({
             "scan_id": sid,
             "target": s["target"],
@@ -898,6 +994,8 @@ async def list_scans():
             "progress": s["progress"],
             "findings_count": s.get("findings_count", 0),
             "started_at": s["started_at"],
+            "elapsed": s.get("elapsed", _current_elapsed(s)),
+            "severity_counts": sev_counts,
             "summary": s.get("summary", {}),
         })
     return result
@@ -1393,6 +1491,42 @@ async def download_docx(scan_id: str):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/api/scan/{scan_id}/report/json")
+async def download_json(scan_id: str):
+    """Download scan results as JSON."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[scan_id]
+    export_data = {
+        "scan_id": scan_id,
+        "target": scan.get("target"),
+        "mode": scan.get("mode"),
+        "status": scan.get("status"),
+        "started_at": scan.get("started_at"),
+        "elapsed": scan.get("elapsed"),
+        "findings": scan.get("findings", []),
+        "stages": scan.get("stages", []),
+        "summary": scan.get("summary", {}),
+    }
+    content = json.dumps(export_data, indent=2, default=str, ensure_ascii=False)
+    safe_target = "".join(c if c.isalnum() or c in "-_." else "_" for c in (scan.get("target", ""))[:30])
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="PentaVault_{safe_target}.json"'},
+    )
+
+
+# ── SPA catch-all for React Router ─────────────────────────────────
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def spa_catch_all(full_path: str):
+    """Serve the React SPA for all non-API routes (client-side routing support)."""
+    # Don't catch API routes or static assets
+    if full_path.startswith(("api/", "static/", "assets/")):
+        raise HTTPException(status_code=404)
+    return FileResponse(str(_resolve_dashboard_index_path()))
 
 
 # ── Entry point ────────────────────────────────────────────────────

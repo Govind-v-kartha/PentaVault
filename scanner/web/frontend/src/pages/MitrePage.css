@@ -1,0 +1,32 @@
+.mitre-page { max-width: 900px; margin: 0 auto; }
+.mitre-header { margin-bottom: var(--sp-4); }
+.mitre-toolbar { display: flex; gap: var(--sp-3); align-items: center; margin-bottom: var(--sp-5); flex-wrap: wrap; }
+.toolbar-btns { display: flex; gap: var(--sp-2); }
+.mitre-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mitre-tactic-card { padding: 0; overflow: hidden; }
+.tactic-header {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5); width: 100%;
+  background: none; border: none; color: var(--pv-white);
+  cursor: pointer; text-align: left; font-size: var(--text-base);
+  transition: background var(--dur-fast) ease;
+}
+.tactic-header:hover { background: rgba(0,212,255,0.03); }
+.tactic-chevron { color: var(--pv-cyan); width: 16px; text-align: center; }
+.tactic-name { flex: 1; font-weight: 600; font-family: var(--font-display); }
+.tactic-count { flex-shrink: 0; }
+.technique-list {
+  padding: 0 var(--sp-5) var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  animation: pv-slide-up 0.2s var(--ease-out);
+}
+.technique-item {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(26,37,54,0.3);
+  background: rgba(10,15,26,0.3);
+  display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: baseline;
+}
+.tech-id { font-size: var(--text-xs); flex-shrink: 0; min-width: 80px; }
+.tech-name { font-size: var(--text-sm); color: var(--pv-ice); }
+.tech-desc { width: 100%; margin-top: 2px; line-height: 1.4; }

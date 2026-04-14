@@ -1,0 +1,10 @@
+.owasp-page { max-width: 900px; margin: 0 auto; }
+.owasp-header { margin-bottom: var(--sp-5); }
+.owasp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--sp-4); }
+.owasp-card { transition: all var(--dur-fast) ease; }
+.owasp-card:hover { transform: translateY(-3px); border-color: rgba(0,212,255,0.3); }
+.owasp-card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }
+.owasp-id { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: 800; }
+.owasp-rank { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--pv-fog); }
+.owasp-name { margin-bottom: var(--sp-2); font-size: var(--text-base); }
+.owasp-desc { line-height: 1.5; }

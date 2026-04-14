@@ -1,0 +1,175 @@
+/* ═══════════════════════════════════════════════════════════════════
+   PentaVault v2.0 — Design System Tokens
+   Premium SOC dashboard aesthetic: glassmorphism + cyberpunk palette
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Core palette ─────────────────────────────────────────────── */
+  --pv-void:      #060910;
+  --pv-abyss:     #0a0f1a;
+  --pv-obsidian:  #0c1219;
+  --pv-slate:     #111a26;
+  --pv-rim:       #1a2536;
+  --pv-mist:      #243348;
+  --pv-fog:       #7e95b0;
+  --pv-ice:       #c5d8f0;
+  --pv-white:     #e8f0fa;
+
+  /* ── Accent signals ───────────────────────────────────────────── */
+  --pv-cyan:      #00d4ff;
+  --pv-cyan-dim:  rgba(0, 212, 255, 0.12);
+  --pv-cyan-glow: rgba(0, 212, 255, 0.35);
+  --pv-green:     #00e87b;
+  --pv-green-dim: rgba(0, 232, 123, 0.12);
+  --pv-purple:    #8b5cf6;
+  --pv-purple-dim:rgba(139, 92, 246, 0.12);
+
+  /* ── Severity palette ─────────────────────────────────────────── */
+  --sev-critical:    #ff1a4a;
+  --sev-critical-bg: rgba(255, 26, 74, 0.10);
+  --sev-high:        #ff6a30;
+  --sev-high-bg:     rgba(255, 106, 48, 0.10);
+  --sev-medium:      #f5a623;
+  --sev-medium-bg:   rgba(245, 166, 35, 0.10);
+  --sev-low:         #00e87b;
+  --sev-low-bg:      rgba(0, 232, 123, 0.10);
+  --sev-info:        #4fa5ff;
+  --sev-info-bg:     rgba(79, 165, 255, 0.10);
+
+  /* ── Typography ───────────────────────────────────────────────── */
+  --font-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body:    'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+
+  --text-xs:   0.69rem;
+  --text-sm:   0.78rem;
+  --text-base: 0.875rem;
+  --text-md:   1rem;
+  --text-lg:   1.15rem;
+  --text-xl:   1.35rem;
+  --text-2xl:  1.6rem;
+  --text-3xl:  2rem;
+
+  /* ── Spacing ──────────────────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ── Radii ────────────────────────────────────────────────────── */
+  --radius-sm:  8px;
+  --radius-md:  12px;
+  --radius-lg:  16px;
+  --radius-xl:  20px;
+  --radius-full: 999px;
+
+  /* ── Glass card system ────────────────────────────────────────── */
+  --glass-bg:      linear-gradient(145deg, rgba(14, 22, 34, 0.82), rgba(10, 16, 26, 0.72));
+  --glass-border:  rgba(26, 37, 54, 0.85);
+  --glass-blur:    blur(16px);
+  --glass-shadow:  0 8px 32px rgba(0, 0, 0, 0.28),
+                   0 2px 8px rgba(0, 0, 0, 0.14),
+                   inset 0 1px 0 rgba(255, 255, 255, 0.02);
+
+  /* ── Transitions ──────────────────────────────────────────────── */
+  --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast:  150ms;
+  --dur-base:  250ms;
+  --dur-slow:  400ms;
+
+  /* ── Sidebar ──────────────────────────────────────────────────── */
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 64px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Animation Keyframes
+   ═══════════════════════════════════════════════════════════════════ */
+
+@keyframes pv-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes pv-slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pv-slide-right {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pv-scale-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pv-pulse-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(0, 212, 255, 0.2); }
+  50%      { box-shadow: 0 0 24px rgba(0, 212, 255, 0.45); }
+}
+
+@keyframes pv-radar-sweep {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes pv-scan-line {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 0.6; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
+
+@keyframes pv-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50%      { transform: scale(1.4); opacity: 1; }
+}
+
+@keyframes pv-counter-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+@keyframes pv-progress-stripe {
+  0%   { background-position: 0 0; }
+  100% { background-position: 40px 0; }
+}
+
+@keyframes pv-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pv-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+@keyframes pv-finding-in {
+  from { opacity: 0; transform: translateX(24px) scale(0.95); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes pv-stage-complete {
+  0%   { background-color: rgba(0, 232, 123, 0.3); }
+  100% { background-color: transparent; }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

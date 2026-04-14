@@ -1,0 +1,39 @@
+.mitre-heatmap { display: flex; flex-direction: column; gap: var(--sp-4); }
+.heatmap-summary {
+  display: flex; gap: var(--sp-4); flex-wrap: wrap;
+}
+.hm-stat {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--pv-cyan);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--pv-cyan-dim);
+  border: 1px solid rgba(0,212,255,0.15);
+  border-radius: var(--radius-sm);
+}
+.heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--sp-2);
+}
+.heatmap-cell {
+  padding: var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(10,15,26,0.5);
+  transition: all var(--dur-fast) ease;
+  cursor: default;
+}
+.heatmap-cell:hover { transform: translateY(-2px); }
+.heatmap-cell.heat-high {
+  border-color: rgba(255,106,48,0.5);
+  background: rgba(255,106,48,0.08);
+}
+.heatmap-cell.heat-med {
+  border-color: rgba(0,212,255,0.3);
+  background: rgba(0,212,255,0.05);
+}
+.heatmap-cell.heat-none { opacity: 0.5; }
+.hm-cell-name { font-size: var(--text-xs); font-weight: 600; color: var(--pv-ice); margin-bottom: 2px; }
+.hm-cell-id { font-family: var(--font-mono); font-size: 0.6rem; color: var(--pv-fog); }
+.hm-cell-stat { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--pv-cyan); margin-top: var(--sp-1); }

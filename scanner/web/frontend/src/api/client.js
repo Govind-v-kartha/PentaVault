@@ -1,233 +1,108 @@
-class ApiError extends Error {
-  constructor(message, status = 500, detail = null) {
-    super(message);
-    this.name = "ApiError";
+/* PentaVault v2.0 — API Client with SSE support */
+
+const BASE = '';
+
+export class ApiError extends Error {
+  constructor(status, detail) {
+    super(typeof detail === 'string' ? detail : detail?.message || `HTTP ${status}`);
     this.status = status;
     this.detail = detail;
   }
 }
 
-const JSON_HEADERS = { "Content-Type": "application/json" };
-
-async function parseResponse(response) {
-  if (response.ok) {
-    const text = await response.text();
-    return text ? JSON.parse(text) : {};
+async function request(method, path, body = null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
   }
-
-  let detail = null;
-  try {
-    const payload = await response.json();
-    detail = payload?.detail ?? payload;
-  } catch {
-    detail = null;
+  const res = await fetch(BASE + path, opts);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.detail || data);
   }
-
-  const message =
-    (typeof detail === "string" && detail) ||
-    (detail?.message && String(detail.message)) ||
-    `Request failed (${response.status})`;
-
-  throw new ApiError(message, response.status, detail);
+  return res.json();
 }
 
-export async function getFrontendMode() {
-  const resp = await fetch("/api/frontend/mode");
-  return parseResponse(resp);
-}
+/* ── REST endpoints ─────────────────────────────────────────────── */
+export const startScan     = (payload) => request('POST', '/api/scan', payload);
+export const getScan       = (id)      => request('GET',  `/api/scan/${id}`);
+export const getScanFindings = (id)    => request('GET',  `/api/scan/${id}/findings`);
+export const cancelScan    = (id)      => request('POST', `/api/scan/${id}/cancel`);
+export const deleteScan    = (id)      => request('DELETE', `/api/scan/${id}`);
+export const updateScan    = (id, d)   => request('PATCH', `/api/scan/${id}`, d);
+export const listScans     = ()        => request('GET',  '/api/scans');
+export const getMitreBreakdown = (id)  => request('GET',  `/api/scan/${id}/mitre`);
+export const getOwaspRef   = ()        => request('GET',  '/api/owasp');
+export const getMitreRef   = ()        => request('GET',  '/api/mitre');
+export const getMitreTactics = ()      => request('GET',  '/api/mitre/tactics');
+export const aiAnalyze     = (id)      => request('POST', '/api/ai/analyze', { scan_id: id });
+export const aiRemediate   = (id, idx) => request('POST', '/api/ai/remediate', { scan_id: id, finding_index: idx });
+export const aiExecSummary = (id)      => request('POST', '/api/ai/executive-summary', { scan_id: id });
+export const aiMitreExplain = (body)   => request('POST', '/api/ai/mitre-explain', body);
+export const getReportPdfUrl  = (id)   => `${BASE}/api/scan/${id}/report/pdf`;
+export const getReportDocxUrl = (id)   => `${BASE}/api/scan/${id}/report/docx`;
 
-export async function startScan(payload) {
-  const resp = await fetch("/api/scan", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(payload),
+/* ── SSE consumer for AI streams ────────────────────────────────── */
+export function consumeAiStream(path, body, { onDelta, onFinal, onError }) {
+  return new Promise((resolve, reject) => {
+    fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(res => {
+      if (!res.ok) {
+        res.json().catch(() => ({})).then(d => {
+          onError?.(d.detail || d);
+          reject(new ApiError(res.status, d.detail || d));
+        });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      function pump() {
+        reader.read().then(({ done, value }) => {
+          if (done) { resolve(); return; }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const payload = JSON.parse(line.slice(6));
+                if (payload.event === 'delta')  onDelta?.(payload.data?.chunk || '');
+                if (payload.event === 'final')  onFinal?.(payload.data);
+                if (payload.event === 'error')  onError?.(payload.data);
+              } catch (e) { /* skip malformed */ }
+            }
+          }
+          pump();
+        }).catch(reject);
+      }
+      pump();
+    }).catch(reject);
   });
-  return parseResponse(resp);
 }
 
-export async function getScan(scanId) {
-  const resp = await fetch(`/api/scan/${encodeURIComponent(scanId)}`);
-  return parseResponse(resp);
-}
-
-export async function updateScan(scanId, body) {
-  const resp = await fetch(`/api/scan/${encodeURIComponent(scanId)}`, {
-    method: "PATCH",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(body),
-  });
-  return parseResponse(resp);
-}
-
-export async function cancelScan(scanId) {
-  const resp = await fetch(`/api/scan/${encodeURIComponent(scanId)}/cancel`, {
-    method: "POST",
-  });
-  return parseResponse(resp);
-}
-
-export async function listScans() {
-  const resp = await fetch("/api/scans");
-  return parseResponse(resp);
-}
-
-export async function deleteScan(scanId) {
-  const resp = await fetch(`/api/scan/${encodeURIComponent(scanId)}`, {
-    method: "DELETE",
-  });
-  return parseResponse(resp);
-}
-
-export async function fetchOwaspReference() {
-  const resp = await fetch("/api/owasp");
-  return parseResponse(resp);
-}
-
-export async function fetchMitreReference() {
-  const resp = await fetch("/api/mitre");
-  return parseResponse(resp);
-}
-
-export async function fetchMitreTactics() {
-  const resp = await fetch("/api/mitre/tactics");
-  return parseResponse(resp);
-}
-
-export async function fetchMitreBreakdown(scanId) {
-  const resp = await fetch(`/api/scan/${encodeURIComponent(scanId)}/mitre`);
-  return parseResponse(resp);
-}
-
-export async function aiAnalyze(scanId) {
-  const resp = await fetch("/api/ai/analyze", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ scan_id: scanId }),
-  });
-  return parseResponse(resp);
-}
-
-export async function aiExecutiveSummary(scanId) {
-  const resp = await fetch("/api/ai/executive-summary", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ scan_id: scanId }),
-  });
-  return parseResponse(resp);
-}
-
-export async function aiRemediate(scanId, findingIndex) {
-  const resp = await fetch("/api/ai/remediate", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ scan_id: scanId, finding_index: findingIndex }),
-  });
-  return parseResponse(resp);
-}
-
-export async function aiMitreExplain({ scanId, techniqueId, techniqueName = "", tactic = "", question = "" }) {
-  const resp = await fetch("/api/ai/mitre-explain", {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      scan_id: scanId,
-      technique_id: techniqueId,
-      technique_name: techniqueName,
-      tactic,
-      question,
-    }),
-  });
-  return parseResponse(resp);
-}
-
-function parseSseBlock(raw) {
-  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (!lines.length) {
-    return null;
-  }
-
-  let event = "message";
-  const dataLines = [];
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim();
-      continue;
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trim());
-    }
-  }
-
-  const dataText = dataLines.join("\n");
-  let data = dataText;
-  if (dataText) {
+/* ── SSE consumer for scan progress ─────────────────────────────── */
+export function subscribeScanProgress(scanId, { onProgress, onStageComplete, onFinding, onComplete, onError }) {
+  const es = new EventSource(BASE + `/api/scan/${scanId}/stream`);
+  es.onmessage = (evt) => {
     try {
-      data = JSON.parse(dataText);
-    } catch {
-      data = dataText;
-    }
-  }
-
-  return { event, data };
+      const data = JSON.parse(evt.data);
+      switch (data.event) {
+        case 'progress':        onProgress?.(data);     break;
+        case 'stage_complete':  onStageComplete?.(data); break;
+        case 'finding':         onFinding?.(data);       break;
+        case 'complete':        onComplete?.(data);      es.close(); break;
+        case 'failed':          onError?.(data);         es.close(); break;
+        case 'cancelled':       onComplete?.(data);      es.close(); break;
+        default: break;
+      }
+    } catch (e) { /* skip */ }
+  };
+  es.onerror = () => { onError?.({ message: 'Connection lost' }); };
+  return () => es.close();
 }
-
-export async function consumeAiStream(endpoint, body, handlers = {}) {
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok || !resp.body) {
-    await parseResponse(resp);
-    return;
-  }
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  const onEvent = handlers.onEvent ?? (() => {});
-  const onError = handlers.onError ?? (() => {});
-  const onDone = handlers.onDone ?? (() => {});
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() ?? "";
-
-    for (const chunk of chunks) {
-      const evt = parseSseBlock(chunk);
-      if (!evt) {
-        continue;
-      }
-      onEvent(evt);
-      if (evt.event === "error") {
-        onError(evt.data);
-      }
-      if (evt.event === "done") {
-        onDone(evt.data);
-      }
-    }
-  }
-
-  if (buffer.trim()) {
-    const evt = parseSseBlock(buffer);
-    if (evt) {
-      onEvent(evt);
-      if (evt.event === "error") {
-        onError(evt.data);
-      }
-      if (evt.event === "done") {
-        onDone(evt.data);
-      }
-    }
-  }
-}
-
-export { ApiError };
