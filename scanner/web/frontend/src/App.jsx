@@ -13,7 +13,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<DashboardPage />} />
+          <Route index element={<ScanPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
           <Route path="scan" element={<ScanPage />} />
           <Route path="scan/:id/live" element={<LiveScanPage />} />
           <Route path="scan/:id/results" element={<ResultsPage />} />

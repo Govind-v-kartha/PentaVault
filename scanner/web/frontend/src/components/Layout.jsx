@@ -2,11 +2,11 @@ import { NavLink, Outlet } from 'react-router-dom';
 import './Layout.css';
 
 const NAV_ITEMS = [
-  { to: '/',        icon: '◈', label: 'Dashboard' },
-  { to: '/scan',    icon: '⊕', label: 'New Scan' },
-  { to: '/history', icon: '◷', label: 'History' },
-  { to: '/mitre',   icon: '⬡', label: 'MITRE ATT&CK' },
-  { to: '/owasp',   icon: '⊞', label: 'OWASP 2025' },
+  { to: '/',          icon: '⊕', label: 'New Scan' },
+  { to: '/dashboard', icon: '◈', label: 'Dashboard' },
+  { to: '/history',   icon: '◷', label: 'History' },
+  { to: '/mitre',     icon: '⬡', label: 'MITRE ATT&CK' },
+  { to: '/owasp',     icon: '⊞', label: 'OWASP 2025' },
 ];
 
 export default function Layout() {
