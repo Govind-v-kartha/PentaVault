@@ -65,9 +65,19 @@ export default function ResultsPage() {
 
   function aiErrorHtml(e) {
     const msg = e.message || String(e);
-    if (msg.includes('unavailable') || msg.includes('retry') || msg.includes('502') || msg.includes('exhausted'))
-      return `<div class="ai-error"><strong>⏳ AI Temporarily Unavailable</strong><p>All API keys are rate-limited. Please wait a few minutes and try again.</p></div>`;
-    return `<div class="ai-error"><strong>❌ AI Error</strong><p>${msg}</p></div>`;
+    const detail = e.detail || {};
+    const code = detail.code || '';
+    const retryable = detail.retryable !== false;
+
+    if (code === 'AI_CONFIG_MISSING' || msg.includes('not configured'))
+      return `<div class="ai-error ai-error--config"><strong>AI Not Configured</strong><p>No API keys found. Add your Gemini API keys to the <code>.env</code> file and restart the server.</p></div>`;
+
+    if (code === 'AI_UPSTREAM_UNAVAILABLE' || msg.includes('unavailable') || msg.includes('retry') || msg.includes('502') || msg.includes('exhausted') || msg.includes('rate'))
+      return `<div class="ai-error ai-error--quota"><strong>AI Rate Limited</strong><p>All API keys have reached their quota. The free tier resets daily — please try again later or add additional API keys.</p></div>`;
+
+    // Generic / unknown
+    const safeMsg = msg.replace(/</g, '&lt;').replace(/>/g, '&gt;').slice(0, 200);
+    return `<div class="ai-error"><strong>Analysis Failed</strong><p>${safeMsg}</p>${retryable ? '<p class="ai-error-hint">This may be a temporary issue — try again in a moment.</p>' : ''}</div>`;
   }
 
   async function runAiAnalysis() {
