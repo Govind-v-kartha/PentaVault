@@ -17,7 +17,9 @@ import argparse
 import os
 import signal
 import sys
+import threading
 import time
+
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -404,19 +406,20 @@ def main() -> None:
     all_findings: list[dict[str, Any]] = []
     stage_times: list[tuple[str, float]] = []
 
-    _interrupted = False
+    cancel_event = threading.Event()
 
     def _sigint_handler(signum, frame):
-        nonlocal _interrupted
-        _interrupted = True
-        log.warning("Interrupt signal received (SIGINT) — initiating graceful shutdown...")
+        if not cancel_event.is_set():
+            cancel_event.set()
+            log.warning("Interrupt signal received (SIGINT) — initiating graceful shutdown...")
 
     try:
         signal.signal(signal.SIGINT, _sigint_handler)
     except (ValueError, AttributeError):
         pass
 
-    _should_stop = lambda: _interrupted
+    _should_stop = lambda: cancel_event.is_set()
+
 
     # ── STAGE 01: Target Input (parsed above) ──────────────────────
     log.info("=== STAGE 01: Target Input ===")

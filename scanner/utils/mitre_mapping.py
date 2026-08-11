@@ -228,7 +228,8 @@ _reg(Technique(
     tactic_ids=["TA0042"],
     url="https://attack.mitre.org/techniques/T1584/001/",
     description="Adversaries may compromise domains owned by third parties to hijack subdomains, host malicious content, or conduct adversary-in-the-middle attacks via dangling DNS records.",
-    platforms=[Platform.PRE, Platform.IaaS],
+    platforms=[Platform.PRE, Platform.IAAS],
+
     data_sources=["DNS: Response", "Domain Registration: Domain Name"],
     detection="Monitor DNS records for dangling CNAME pointers to unallocated cloud resources.",
     mitigations=["M1056 — Pre-compromise: Audit external CNAME records regularly and remove dangling pointers."],
