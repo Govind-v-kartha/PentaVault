@@ -75,7 +75,7 @@ BANNER = r"""
   ╔══════════════════════════════════════════════╗
   ║        PentaVault  v1.1.0                    ║
   ║   For authorized VAPT engagements only.      ║
-  ║   --browser  →  Selenium-powered scanning    ║
+  ║   --browser  →  Playwright-powered scanning  ║
   ╚══════════════════════════════════════════════╝
 """
 
@@ -126,9 +126,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--browser", action="store_true", default=False,
-        help="Use Selenium (headless Chrome) for crawling and vulnerability testing. "
+        help="Use Playwright (headless Chromium) for crawling and vulnerability testing. "
              "More accurate — renders JS, confirms XSS via real alert(), captures screenshots.",
     )
+
     parser.add_argument(
         "--crawl-mode",
         choices=["auto", "httpx", "selenium", "hybrid"],

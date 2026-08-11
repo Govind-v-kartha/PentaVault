@@ -22,7 +22,7 @@
 | **Scan Modes** | `quick`, `full`, `web-only`, `network-only` |
 | **Crawl Strategies** | `auto`, `httpx`, `selenium`, `hybrid` |
 | **Web Vulnerability Modules** | 23 modules: SQLi, XSS, Headers, SSRF, IDOR, Open Redirect, Command Injection, XXE, LFI, Sensitive Files, NoSQLi, SSTI, GraphQL Abuse, JWT Checks, Host Header Injection, CORS Misconfiguration, HPP, CRLF Injection, Request Smuggling, Mass Assignment/BOLA, Insecure Deserialization, Prototype Pollution, CSV/Formula Injection |
-| **Browser Engine** | Optional Selenium headless/headed Chrome for JS-heavy apps |
+| **Browser Engine** | Optional Playwright headless/headed Chromium for JS-heavy apps |
 | **MITRE ATT&CK v16.1** | 47 techniques across all 14 Enterprise tactics with confidence scoring, attack path analysis, and matrix coverage heatmap |
 | **OWASP 2025 Top 10** | Full A01–A10 category mapping for every finding |
 | **CVSS v3.1 Scoring** | Automatic severity scoring with vector strings |
@@ -50,7 +50,7 @@ c:\Project 1\
 │   │   ├── crawler.py           # Static HTTP crawler
 │   │   ├── selenium_crawler.py  # Browser-based crawler (SPA/JS support)
 │   │   ├── scorer.py            # CVSS v3.1 severity scoring
-│   │   └── browser.py           # Shared Selenium browser utilities
+│   │   └── browser.py           # Shared Playwright browser utilities
 │   │
 │   ├── modules/                 # Vulnerability testing modules
 │   │   ├── sqli.py              # SQL Injection (error, time-blind, boolean)
@@ -109,8 +109,7 @@ c:\Project 1\
 - **Python 3.13+**
 - **Node.js 18+** — required for DOCX report generation
 - **Nmap** — installed and in PATH ([https://nmap.org/download.html](https://nmap.org/download.html))
-- **Google Chrome / Chromium / Edge** — required only for Selenium browser mode
-- **ChromeDriver / EdgeDriver** — required for Selenium browser mode
+- **Playwright** — required for browser mode
 
 ### Setup
 
@@ -124,6 +123,7 @@ python -m venv .venv
 
 # Install dependencies
 pip install -r scanner/requirements.txt
+playwright install chromium
 npm install
 
 # Optional: configure Gemini AI keys
@@ -201,7 +201,7 @@ python main.py --target https://example.com --mode quick
 # Full scan with all stages
 python main.py --target https://example.com --mode full --threads 5
 
-# Web-only with Selenium browser engine
+# Web-only with Playwright browser engine
 python main.py --target https://example.com --mode web-only --browser
 
 # Network recon only
@@ -228,7 +228,8 @@ python main.py \
 | `--threads` | `5` | Concurrent threads (max: 10) |
 | `--timeout` | `10` | Per-request timeout in seconds |
 | `--cookie` | `None` | Session cookie for authenticated scans |
-| `--browser` | `off` | Use Selenium headless Chrome |
+| `--browser` | `off` | Use Playwright headless Chromium |
+
 | `--crawl-mode` | `auto` | `auto`, `httpx`, `selenium`, `hybrid` |
 | `--headed` | `off` | Show browser window (implies `--browser`) |
 | `--output` | `findings.json` | Output JSON report path |
