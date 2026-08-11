@@ -7,3 +7,6 @@ services:
     envVars:
       - key: PENTAVAULT_FRONTEND_MODE
         value: react
+      - key: PENTAVAULT_GEMINI_API_KEYS
+        sync: false
+
