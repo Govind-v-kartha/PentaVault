@@ -80,6 +80,8 @@ from scanner.modules.mass_assignment import test_mass_assignment_bola
 from scanner.modules.insecure_deserialization import test_insecure_deserialization
 from scanner.modules.prototype_pollution import test_prototype_pollution
 from scanner.modules.csv_formula_injection import test_csv_formula_injection
+from scanner.modules.ssl_tls import test_ssl_tls
+
 
 setup_logger(log_dir=os.environ.get("PENTAVAULT_LOGS_DIR", "logs"))
 log = get_logger("web")
@@ -601,7 +603,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 ("Insecure Deserialization", lambda: test_insecure_deserialization(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("Prototype Pollution", lambda: test_prototype_pollution(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("CSV/Formula Injection", lambda: test_csv_formula_injection(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("SSL/TLS Analysis", lambda: test_ssl_tls(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
             ]
+
 
             if use_browser_vuln:
                 from scanner.modules.sqli_selenium import test_sqli_selenium

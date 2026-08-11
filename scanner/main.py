@@ -63,6 +63,8 @@ from scanner.modules.mass_assignment import test_mass_assignment_bola
 from scanner.modules.insecure_deserialization import test_insecure_deserialization
 from scanner.modules.prototype_pollution import test_prototype_pollution
 from scanner.modules.csv_formula_injection import test_csv_formula_injection
+from scanner.modules.ssl_tls import test_ssl_tls
+
 
 
 BANNER = r"""
@@ -276,6 +278,9 @@ def _run_web_modules(
     def _csv_formula_injection():
         return test_csv_formula_injection(endpoints, forms, cookie=cookie, timeout=timeout, quick=quick, should_stop=should_stop)
 
+    def _ssl_tls():
+        return test_ssl_tls(base_url, should_stop=should_stop, timeout=timeout, quick=quick)
+
     def _timed(name: str, fn):
         """Wrapper that times a module and logs duration."""
         t0 = time.monotonic()
@@ -307,7 +312,9 @@ def _run_web_modules(
         "Insecure Deserialization": _insecure_deserialization,
         "Prototype Pollution": _prototype_pollution,
         "CSV/Formula Injection": _csv_formula_injection,
+        "SSL/TLS Analysis": _ssl_tls,
     }
+
 
     if use_browser:
         # Selenium modules each open their own browser — run them sequentially
