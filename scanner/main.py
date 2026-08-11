@@ -409,7 +409,10 @@ def main() -> None:
     t_stage = time.monotonic()
     if args.mode in ("full", "network-only"):
         recon_data = run_recon(hostname)
+        if recon_data.get("takeover_findings"):
+            all_findings.extend(recon_data["takeover_findings"])
         ip = recon_data.get("ip") or hostname
+
 
         # ── Port scan ──────────────────────────────────────────────
         port_data = scan_ports(ip)

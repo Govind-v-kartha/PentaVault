@@ -431,9 +431,12 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 return
             scan["current_stage"] = "Reconnaissance"
             scan["progress"] = 10
-            t0 = time.monotonic()
-            recon_data = run_recon(hostname)
+            should_stop = lambda: bool(scan.get("_cancel"))
+            recon_data = run_recon(hostname, should_stop=should_stop)
+            if recon_data.get("takeover_findings"):
+                scan["findings"].extend(recon_data["takeover_findings"])
             ip = recon_data.get("ip") or hostname
+
             port_data = scan_ports(ip)
             recon_data["open_ports"] = port_data["open_ports"]
             recon_data["services"] = port_data["services"]
