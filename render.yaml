@@ -1,12 +1,11 @@
 services:
   - type: web
     name: pentavault
-    env: python
-    buildCommand: "pip install -r requirements.txt && playwright install --with-deps chromium && cd scanner/web/frontend && npm install && npm run build && rm -rf ../static/* && cp -r dist/* ../static/"
-    startCommand: "uvicorn scanner.web.app:app --host 0.0.0.0 --port $PORT"
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     envVars:
       - key: PENTAVAULT_FRONTEND_MODE
         value: react
       - key: PENTAVAULT_GEMINI_API_KEYS
         sync: false
-
