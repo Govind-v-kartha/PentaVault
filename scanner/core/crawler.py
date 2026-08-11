@@ -24,6 +24,8 @@ class CrawlResult:
         self.parameters: set[str] = set()
         self.js_api_endpoints: list[str] = []
         self.authenticated_pages: list[str] = []
+        self.page_sources: dict[str, str] = {}
+        self.js_files: list[str] = []
 
     def summary(self) -> dict[str, int]:
         return {
@@ -32,7 +34,10 @@ class CrawlResult:
             "input_parameters": len(self.parameters),
             "js_api_endpoints": len(self.js_api_endpoints),
             "authenticated_pages": len(self.authenticated_pages),
+            "page_sources": len(self.page_sources),
+            "js_files": len(self.js_files),
         }
+
 
 
 def _is_same_origin(base: str, url: str) -> bool:
@@ -138,6 +143,7 @@ def crawl(
                 continue
 
             result.endpoints.append(normalized)
+            result.page_sources[normalized] = resp.text
 
             # Detect pages that required authentication (redirected to login, 401/403)
             if resp.status_code in (401, 403):
@@ -149,6 +155,12 @@ def crawl(
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Extract script src references
+            for tag in soup.find_all("script", src=True):
+                js_url = urljoin(normalized, tag["src"])
+                if _is_same_origin(base_url, js_url):
+                    result.js_files.append(js_url)
 
             # Forms
             forms = _extract_forms(soup, normalized)
@@ -169,10 +181,12 @@ def crawl(
                     href = urljoin(normalized, tag["href"])
                     queue.append((href, depth + 1))
 
-    # Deduplicate JS endpoints
+    # Deduplicate JS endpoints and JS files
     result.js_api_endpoints = list(set(result.js_api_endpoints))
+    result.js_files = list(set(result.js_files))
 
     summary = result.summary()
+
     log.info(
         "Crawl complete — Endpoints: %d | Forms: %d | Params: %d | JS APIs: %d | Auth pages: %d",
         summary["endpoints_found"],

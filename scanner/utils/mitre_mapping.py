@@ -622,6 +622,21 @@ _reg(Technique(
     severity_weight=7.5,
 ))
 
+_reg(Technique(
+    id="T1552.001", name="Unsecured Credentials: Credentials In Files",
+    tactic_ids=["TA0006"],
+    url="https://attack.mitre.org/techniques/T1552/001/",
+    description="Adversaries search for hardcoded credentials, API keys, tokens, or private keys exposed in source code, client-side JavaScript bundles, configuration files, or public repositories.",
+    platforms=[Platform.LINUX, Platform.WINDOWS, Platform.MACOS, Platform.SAAS, Platform.IAAS],
+    data_sources=["File: File Content", "Script: Script Execution"],
+    detection="Audit client-side JavaScript bundles and HTML source for exposed API keys, tokens, and credentials.",
+    mitigations=["M1027 — Password Policies", "M1041 — Encrypt Sensitive Information (do not embed secrets in client-side code)"],
+    kill_chain=[KillChainPhase.EXPLOITATION],
+    severity_weight=7.5,
+    is_subtechnique=True, parent_id="T1552",
+))
+
+
 # ── TA0007 Discovery ─────────────────────────────────────────────
 
 _reg(Technique(
@@ -1062,6 +1077,10 @@ _VULN_RULES: list[_MappingRule] = [
     _MappingRule("session fixation",          ["T1539", "T1185"]),
     _MappingRule("session hijack",            ["T1539", "T1185"]),
     _MappingRule("credential",                ["T1555", "T1078"],                            Confidence.MEDIUM),
+    _MappingRule("secrets detection",          ["T1552.001", "T1555"]),
+    _MappingRule("hardcoded secret",           ["T1552.001", "T1555"]),
+    _MappingRule("exposed secret",             ["T1552.001", "T1555"]),
+
 
     # ── Security Headers ───────────────────────────────────────
     _MappingRule("content-security-policy",   ["T1059.007", "T1189", "T1562"]),

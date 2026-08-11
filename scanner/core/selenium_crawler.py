@@ -189,9 +189,20 @@ def selenium_crawl(
                     if inp["name"]:
                         result.parameters.add(inp["name"])
 
-            # JS endpoints from page source
+            # JS endpoints and script tags from page source
             page_source = driver.page_source
+            result.page_sources[normalized] = page_source
             result.js_api_endpoints.extend(_extract_js_endpoints(page_source, normalized))
+
+            try:
+                for script_el in driver.find_elements(By.TAG_NAME, "script"):
+                    src = script_el.get_attribute("src")
+                    if src:
+                        js_url = urljoin(normalized, src)
+                        if _is_same_origin(base_url, js_url):
+                            result.js_files.append(js_url)
+            except WebDriverException:
+                pass
 
             # Captured XHR/fetch URLs
             captured = _intercept_xhr(driver)
@@ -207,8 +218,10 @@ def selenium_crawl(
 
     # Deduplicate
     result.js_api_endpoints = list(set(result.js_api_endpoints))
+    result.js_files = list(set(result.js_files))
 
     summary = result.summary()
+
     log.info(
         "Selenium crawl complete — Endpoints: %d | Forms: %d | Params: %d | JS APIs: %d | Auth pages: %d",
         summary["endpoints_found"],

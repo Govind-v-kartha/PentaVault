@@ -68,6 +68,8 @@ from scanner.modules.insecure_deserialization import test_insecure_deserializati
 from scanner.modules.prototype_pollution import test_prototype_pollution
 from scanner.modules.csv_formula_injection import test_csv_formula_injection
 from scanner.modules.ssl_tls import test_ssl_tls
+from scanner.modules.secrets_detection import test_secrets_detection
+
 
 
 
@@ -366,7 +368,10 @@ def _merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlRe
     merged.parameters = set(primary.parameters) | set(fallback.parameters)
     merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
     merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
+    merged.page_sources = {**fallback.page_sources, **primary.page_sources}
+    merged.js_files = list(dict.fromkeys(primary.js_files + fallback.js_files))
     return merged
+
 
 
 def main() -> None:
@@ -525,8 +530,21 @@ def main() -> None:
         forms = crawl_result.forms
         crawl_summary = crawl_result.summary()
         stage_times.append((crawler_label, time.monotonic() - t_stage))
+
+        # Secrets Detection on crawled page sources and JS files
+        secrets_findings = test_secrets_detection(
+            crawl_result=crawl_result,
+            base_url=url,
+            cookie=args.cookie,
+            timeout=args.timeout,
+            quick=(args.mode == "quick"),
+            should_stop=_should_stop,
+        )
+        if secrets_findings:
+            all_findings.extend(secrets_findings)
     else:
         log.info("Skipping web crawl (mode=%s)", args.mode)
+
 
     # ── STAGE 05: Vulnerability Modules ────────────────────────────
     t_stage = time.monotonic()
