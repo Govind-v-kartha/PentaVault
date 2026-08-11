@@ -603,7 +603,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 ("Insecure Deserialization", lambda: test_insecure_deserialization(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("Prototype Pollution", lambda: test_prototype_pollution(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("CSV/Formula Injection", lambda: test_csv_formula_injection(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
-                ("SSL/TLS Analysis", lambda: test_ssl_tls(url, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+                ("SSL/TLS Analysis", lambda: test_ssl_tls(url, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
+
             ]
 
 
