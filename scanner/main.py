@@ -39,7 +39,8 @@ from scanner.utils.report_exporter import export_json
 from scanner.core.recon import run_recon
 from scanner.core.port_scanner import scan_ports
 from scanner.core.fingerprint import run_fingerprint
-from scanner.core.crawler import CrawlResult, crawl
+from scanner.core.crawler import CrawlResult, crawl, merge_crawl_results
+
 from scanner.core.dependency_check import check_dependencies
 from scanner.core.scorer import enrich_findings
 from scanner.modules.sqli import test_sqli
@@ -361,17 +362,6 @@ def _run_web_modules(
     return all_findings
 
 
-def _merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlResult:
-    merged = CrawlResult()
-    merged.endpoints = list(dict.fromkeys(primary.endpoints + fallback.endpoints))
-    merged.forms = primary.forms + fallback.forms
-    merged.parameters = set(primary.parameters) | set(fallback.parameters)
-    merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
-    merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
-    merged.page_sources = {**fallback.page_sources, **primary.page_sources}
-    merged.js_files = list(dict.fromkeys(primary.js_files + fallback.js_files))
-    return merged
-
 
 
 def main() -> None:
@@ -509,7 +499,8 @@ def main() -> None:
                     headless=headless,
                     request_delay=args.request_delay,
                 )
-                crawl_result = _merge_crawl_results(primary, fallback)
+                crawl_result = merge_crawl_results(primary, fallback)
+
                 crawler_label = "Hybrid Crawler"
             else:
                 crawl_result = primary

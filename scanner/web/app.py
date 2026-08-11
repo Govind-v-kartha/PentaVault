@@ -54,7 +54,8 @@ from scanner.utils.pdf_report import generate_pdf, generate_docx
 from scanner.core.recon import run_recon
 from scanner.core.port_scanner import scan_ports
 from scanner.core.fingerprint import run_fingerprint
-from scanner.core.crawler import CrawlResult, crawl
+from scanner.core.crawler import CrawlResult, crawl, merge_crawl_results
+
 from scanner.core.dependency_check import check_dependencies
 from scanner.core.scorer import enrich_findings
 from scanner.modules.secrets_detection import test_secrets_detection
@@ -341,17 +342,6 @@ def _normalise_target(raw: str) -> tuple[str, str, bool]:
     return f"http://{raw.rstrip('/')}", host, False
 
 
-def _merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlResult:
-    merged = CrawlResult()
-    merged.endpoints = list(dict.fromkeys(primary.endpoints + fallback.endpoints))
-    merged.forms = primary.forms + fallback.forms
-    merged.parameters = set(primary.parameters) | set(fallback.parameters)
-    merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
-    merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
-    merged.page_sources = {**fallback.page_sources, **primary.page_sources}
-    merged.js_files = list(dict.fromkeys(primary.js_files + fallback.js_files))
-    return merged
-
 
 
 def _ensure_scan_runtime_metadata(scan: dict[str, Any]) -> None:
@@ -540,7 +530,8 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                             should_stop=should_stop,
                             request_delay=req.request_delay,
                         )
-                        crawl_result = _merge_crawl_results(primary, fallback)
+                        crawl_result = merge_crawl_results(primary, fallback)
+
                         crawler_label = "Hybrid Crawler"
                     except Exception as exc:
                         log.warning("[%s] Selenium fallback failed (%s), using httpx results only", scan_id[:8], exc)
@@ -568,22 +559,23 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             scan["stages"].append({"name": crawler_label, "time": round(time.monotonic() - t0, 1)})
             scan["crawl_summary"] = crawl_summary
 
-            # Secrets Detection on crawled page sources and JS files
-            if crawl_result:
-                secrets_findings = test_secrets_detection(
-                    crawl_result=crawl_result,
-                    base_url=url,
-                    cookie=req.cookie,
-                    timeout=req.timeout,
-                    quick=is_quick,
-                    should_stop=should_stop,
-                )
-                if secrets_findings:
-                    all_findings.extend(secrets_findings)
-
-
         # ── Stage 5: Vulnerability Testing ──────────────────────
         all_findings: list[dict[str, Any]] = []
+        is_quick = (req.mode == "quick")
+
+        # Secrets Detection on crawled page sources and JS files
+        if crawl_result:
+            secrets_findings = test_secrets_detection(
+                crawl_result=crawl_result,
+                base_url=url,
+                cookie=req.cookie,
+                timeout=req.timeout,
+                quick=is_quick,
+                should_stop=should_stop,
+            )
+            if secrets_findings:
+                all_findings.extend(secrets_findings)
+
         if req.mode != "network-only" and endpoints:
             if scan.get("_cancel"):
                 _finalize_scan(scan, "cancelled", "Cancelled by user")
@@ -591,7 +583,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             scan["current_stage"] = "Vulnerability Testing"
             scan["progress"] = 50
             t0 = time.monotonic()
-            is_quick = (req.mode == "quick")
+
 
             log.info("[%s] Starting vulnerability testing on %d endpoints | threads=%d | timeout=%.1fs | quick=%s",
                      scan_id[:8], len(endpoints), req.threads, req.timeout, is_quick)

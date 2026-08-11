@@ -39,6 +39,20 @@ class CrawlResult:
         }
 
 
+def merge_crawl_results(primary: CrawlResult, fallback: CrawlResult) -> CrawlResult:
+    """Merge two CrawlResult instances into a unified CrawlResult."""
+    merged = CrawlResult()
+    merged.endpoints = list(dict.fromkeys(primary.endpoints + fallback.endpoints))
+    merged.forms = primary.forms + fallback.forms
+    merged.parameters = set(primary.parameters) | set(fallback.parameters)
+    merged.js_api_endpoints = list(dict.fromkeys(primary.js_api_endpoints + fallback.js_api_endpoints))
+    merged.authenticated_pages = list(dict.fromkeys(primary.authenticated_pages + fallback.authenticated_pages))
+    merged.page_sources = {**fallback.page_sources, **primary.page_sources}
+    merged.js_files = list(dict.fromkeys(primary.js_files + fallback.js_files))
+    return merged
+
+
+
 
 def _is_same_origin(base: str, url: str) -> bool:
     return urlparse(base).netloc == urlparse(url).netloc
