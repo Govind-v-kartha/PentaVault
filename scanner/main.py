@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 import time
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 from urllib.parse import urlparse
@@ -402,16 +404,31 @@ def main() -> None:
     all_findings: list[dict[str, Any]] = []
     stage_times: list[tuple[str, float]] = []
 
+    _interrupted = False
+
+    def _sigint_handler(signum, frame):
+        nonlocal _interrupted
+        _interrupted = True
+        log.warning("Interrupt signal received (SIGINT) — initiating graceful shutdown...")
+
+    try:
+        signal.signal(signal.SIGINT, _sigint_handler)
+    except (ValueError, AttributeError):
+        pass
+
+    _should_stop = lambda: _interrupted
+
     # ── STAGE 01: Target Input (parsed above) ──────────────────────
     log.info("=== STAGE 01: Target Input ===")
 
     # ── STAGE 02: Recon ────────────────────────────────────────────
     t_stage = time.monotonic()
     if args.mode in ("full", "network-only"):
-        recon_data = run_recon(hostname)
+        recon_data = run_recon(hostname, should_stop=_should_stop)
         if recon_data.get("takeover_findings"):
             all_findings.extend(recon_data["takeover_findings"])
         ip = recon_data.get("ip") or hostname
+
 
 
         # ── Port scan ──────────────────────────────────────────────
@@ -522,7 +539,9 @@ def main() -> None:
             quick=(args.mode == "quick"),
             use_browser=use_browser,
             headless=headless,
+            should_stop=_should_stop,
         )
+
         stage_times.append(("Vulnerability Testing", time.monotonic() - t_stage))
     elif args.mode == "network-only":
         log.info("Skipping web vulnerability modules (mode=network-only)")

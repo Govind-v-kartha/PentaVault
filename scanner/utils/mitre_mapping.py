@@ -224,6 +224,20 @@ _reg(Technique(
 ))
 
 _reg(Technique(
+    id="T1584.001", name="Compromise Infrastructure: Domains",
+    tactic_ids=["TA0042"],
+    url="https://attack.mitre.org/techniques/T1584/001/",
+    description="Adversaries may compromise domains owned by third parties to hijack subdomains, host malicious content, or conduct adversary-in-the-middle attacks via dangling DNS records.",
+    platforms=[Platform.PRE, Platform.IaaS],
+    data_sources=["DNS: Response", "Domain Registration: Domain Name"],
+    detection="Monitor DNS records for dangling CNAME pointers to unallocated cloud resources.",
+    mitigations=["M1056 — Pre-compromise: Audit external CNAME records regularly and remove dangling pointers."],
+    kill_chain=[KillChainPhase.WEAPONIZATION],
+    severity_weight=7.5,
+))
+
+
+_reg(Technique(
     id="T1588.006", name="Obtain Capabilities: Vulnerabilities",
     tactic_ids=["TA0042"],
     url="https://attack.mitre.org/techniques/T1588/006/",
@@ -1025,6 +1039,8 @@ _VULN_RULES: list[_MappingRule] = [
     # ── Open Redirect ──────────────────────────────────────────
     _MappingRule("open redirect",             ["T1583.006", "T1189"]),
     _MappingRule("redirect",                  ["T1583.006"],                                 Confidence.LOW),
+    _MappingRule("subdomain takeover",        ["T1584.001"]),
+
 
     # ── Command Injection ──────────────────────────────────────
     _MappingRule("command injection",         ["T1059", "T1190", "T1505.003"]),

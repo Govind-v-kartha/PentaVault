@@ -166,6 +166,15 @@ def check_subdomain_takeover(
                         "evidence": f"Subdomain '{sub}' points via CNAME to '{cname_target}' ({service_name}) which returned unclaimed fingerprint: '{fingerprint_text}'",
                         "remediation": f"Remove the dangling CNAME record for '{sub}' or claim the target resource on {service_name}.",
                         "owasp_category": "A02:2025 - Security Misconfiguration",
+                        "mitre_attack": [
+                            {
+                                "technique": "T1584.001",
+                                "name": "Compromise Infrastructure: Domains",
+                                "tactic": "Resource Development",
+                                "tactic_id": "TA0042",
+                                "url": "https://attack.mitre.org/techniques/T1584/001/",
+                            }
+                        ],
                     })
                     log.warning("Subdomain takeover detected: %s -> %s (%s)", sub, cname_target, service_name)
                     continue
@@ -186,7 +195,17 @@ def check_subdomain_takeover(
                             "evidence": f"Subdomain '{sub}' points via CNAME to '{cname_target}' ({service_name}) which returned unclaimed fingerprint: '{fingerprint_text}'",
                             "remediation": f"Remove the dangling CNAME record for '{sub}' or claim the target resource on {service_name}.",
                             "owasp_category": "A02:2025 - Security Misconfiguration",
+                            "mitre_attack": [
+                                {
+                                    "technique": "T1584.001",
+                                    "name": "Compromise Infrastructure: Domains",
+                                    "tactic": "Resource Development",
+                                    "tactic_id": "TA0042",
+                                    "url": "https://attack.mitre.org/techniques/T1584/001/",
+                                }
+                            ],
                         })
+
                         log.warning("Subdomain takeover detected: %s -> %s (%s)", sub, cname_target, service_name)
             except httpx.HTTPError as exc:
                 log.debug("HTTP request failed during subdomain takeover check for %s: %s", sub, exc)

@@ -36,6 +36,9 @@ def test_subdomain_takeover_positive():
         assert "Subdomain Takeover Vulnerability" in f["title"]
         assert f["severity"] == "High"
         assert f["payload"] == "myapp.herokuapp.com"
+        assert "mitre_attack" in f
+        assert f["mitre_attack"][0]["technique"] == "T1584.001"
+
 
 
 def test_subdomain_takeover_negative_claimed_resource():
