@@ -145,16 +145,16 @@ def check_subdomain_takeover(
         if not matched_service:
             continue
 
-        # Confirmation step: HTTP request to check for unclaimed fingerprint string
+        # Confirmation step: HTTP(S) request to check for unclaimed fingerprint string
         service_name = matched_service["service"]
         fingerprint_text = matched_service["fingerprint"]
-        target_url = f"http://{sub}"
-
+        
+        # Prefer HTTPS for modern SaaS providers; fallback to HTTP if connection fails
+        target_url = f"https://{sub}"
         try:
             with httpx.Client(verify=False, timeout=timeout, follow_redirects=True) as client:
                 resp = client.get(target_url)
-                body = resp.text
-                if fingerprint_text.lower() in body.lower():
+                if fingerprint_text.lower() in resp.text.lower():
                     findings.append({
                         "title": f"Subdomain Takeover Vulnerability on {sub}",
                         "severity": "High",
@@ -168,8 +168,29 @@ def check_subdomain_takeover(
                         "owasp_category": "A02:2025 - Security Misconfiguration",
                     })
                     log.warning("Subdomain takeover detected: %s -> %s (%s)", sub, cname_target, service_name)
-        except httpx.HTTPError as exc:
-            log.debug("HTTP request failed during subdomain takeover check for %s: %s", sub, exc)
+                    continue
+        except httpx.HTTPError:
+            target_url = f"http://{sub}"
+            try:
+                with httpx.Client(verify=False, timeout=timeout, follow_redirects=True) as client:
+                    resp = client.get(target_url)
+                    if fingerprint_text.lower() in resp.text.lower():
+                        findings.append({
+                            "title": f"Subdomain Takeover Vulnerability on {sub}",
+                            "severity": "High",
+                            "cvss_score": 7.5,
+                            "cvss_vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                            "affected_url": target_url,
+                            "parameter": "CNAME Record",
+                            "payload": cname_target,
+                            "evidence": f"Subdomain '{sub}' points via CNAME to '{cname_target}' ({service_name}) which returned unclaimed fingerprint: '{fingerprint_text}'",
+                            "remediation": f"Remove the dangling CNAME record for '{sub}' or claim the target resource on {service_name}.",
+                            "owasp_category": "A02:2025 - Security Misconfiguration",
+                        })
+                        log.warning("Subdomain takeover detected: %s -> %s (%s)", sub, cname_target, service_name)
+            except httpx.HTTPError as exc:
+                log.debug("HTTP request failed during subdomain takeover check for %s: %s", sub, exc)
+
 
     log.info("Subdomain takeover scan complete — %d findings", len(findings))
     return findings
