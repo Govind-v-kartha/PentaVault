@@ -26,9 +26,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY . .
 
-# Overwrite static/ with the freshly built frontend from Stage 1
-RUN rm -rf scanner/web/static/*
+# Overwrite static/ with the freshly built frontend from Stage 1 and populate frontend/dist/
+RUN rm -rf scanner/web/static/* && mkdir -p scanner/web/frontend/dist
 COPY --from=frontend-build /app/frontend/dist/ scanner/web/static/
+COPY --from=frontend-build /app/frontend/dist/ scanner/web/frontend/dist/
+
 
 EXPOSE 8000
 
