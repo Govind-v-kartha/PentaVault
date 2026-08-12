@@ -15,6 +15,15 @@ FROM mcr.microsoft.com/playwright/python:v1.45.0-jammy
 
 WORKDIR /app
 
+# Install system utilities (nmap, chromium, chromium-driver, nodejs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nmap \
+    chromium-browser \
+    chromium-chromedriver \
+    nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+
 # Install Python deps first (better layer caching — only reruns if requirements.txt changes)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

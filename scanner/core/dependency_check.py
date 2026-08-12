@@ -45,7 +45,20 @@ def check_dependencies(
     ]
     has_browser_hint = any(bool(os.environ.get(name)) for name in browser_env_hints)
 
-    has_chrome = has_browser_hint or _binary_available([
+    pw_chrome_found = False
+    try:
+        from pathlib import Path
+        ms_pw = Path("/ms-playwright")
+        if ms_pw.exists():
+            found = list(ms_pw.glob("**/chrome-linux/chrome"))
+            if found:
+                pw_chrome_found = True
+                if "CHROME_PATH" not in os.environ:
+                    os.environ["CHROME_PATH"] = str(found[0])
+    except Exception:
+        pass
+
+    has_chrome = has_browser_hint or pw_chrome_found or _binary_available([
         "chrome",
         "google-chrome",
         "chromium",
@@ -54,6 +67,7 @@ def check_dependencies(
         "msedge",
         "msedge.exe",
     ]) or _known_windows_browser_available()
+
     has_chromedriver = _binary_available(["chromedriver", "chromedriver.exe", "msedgedriver", "msedgedriver.exe"])
 
     network_mode = mode in ("full", "network-only")
