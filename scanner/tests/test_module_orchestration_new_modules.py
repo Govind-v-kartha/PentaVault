@@ -35,6 +35,8 @@ class TestCliModuleOrchestration(unittest.TestCase):
             ("scanner.main.test_insecure_deserialization", [{"title": "insecure_deserialization"}]),
             ("scanner.main.test_prototype_pollution", [{"title": "prototype_pollution"}]),
             ("scanner.main.test_csv_formula_injection", [{"title": "csv_formula"}]),
+            ("scanner.main.test_ssl_tls", [{"title": "ssl_tls"}]),
+            ("scanner.main.test_cloud_misconfig", [{"title": "cloud_misconfig"}]),
         ]
 
         with ExitStack() as stack:
@@ -78,6 +80,8 @@ class TestCliModuleOrchestration(unittest.TestCase):
             "insecure_deserialization",
             "prototype_pollution",
             "csv_formula",
+            "ssl_tls",
+            "cloud_misconfig",
         }
         self.assertTrue(expected.issubset(titles))
 
@@ -108,9 +112,12 @@ class TestWebModuleOrchestration(unittest.TestCase):
             '("Insecure Deserialization", lambda: test_insecure_deserialization',
             '("Prototype Pollution", lambda: test_prototype_pollution',
             '("CSV/Formula Injection", lambda: test_csv_formula_injection',
+            '("SSL/TLS Analysis", lambda: test_ssl_tls',
+            '("Cloud Misconfiguration", lambda: test_cloud_misconfig',
         ]
         for entry in required_entries:
             self.assertIn(entry, source)
+
 
 
 if __name__ == "__main__":
