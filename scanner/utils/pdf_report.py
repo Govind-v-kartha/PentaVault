@@ -944,6 +944,9 @@ def _generate_docx_python(
     doc = docx.Document()
     doc.add_heading("PentaVault — Security Assessment Report", level=0)
 
+    scan_data = scan_data or {}
+    findings = findings or []
+
     # Executive Summary / Metadata
     p = doc.add_paragraph()
     p.add_run("Target: ").bold = True
@@ -963,9 +966,11 @@ def _generate_docx_python(
         doc.add_paragraph("No security vulnerabilities were identified during this assessment.")
     else:
         for idx, f in enumerate(findings, start=1):
-            title = f.get("title", f.get("type", "Vulnerability"))
-            severity = f.get("severity", "Low")
-            doc.add_heading(f"{idx}. {title} [{severity.upper()}]", level=2)
+            if not isinstance(f, dict):
+                continue
+            title = f.get("title") or f.get("type") or "Vulnerability"
+            severity = str(f.get("severity") or "Low").upper()
+            doc.add_heading(f"{idx}. {title} [{severity}]", level=2)
 
             p = doc.add_paragraph()
             p.add_run("Affected URL: ").bold = True
@@ -992,8 +997,8 @@ def _generate_docx_python(
                 p_rem.add_run("Remediation: ").bold = True
                 p_rem.add_run(str(f["remediation"]))
 
-            mitre_list = f.get("mitre_attack", [])
-            if mitre_list:
+            mitre_list = f.get("mitre_attack") or []
+            if isinstance(mitre_list, list) and mitre_list:
                 p_m = doc.add_paragraph()
                 p_m.add_run("MITRE ATT&CK: ").bold = True
                 m_strs = [
@@ -1001,7 +1006,9 @@ def _generate_docx_python(
                     for m in mitre_list
                     if isinstance(m, dict)
                 ]
-                p_m.add_run(", ".join(m_strs))
+                if m_strs:
+                    p_m.add_run(", ".join(m_strs))
+
 
     buf = io.BytesIO()
     doc.save(buf)
