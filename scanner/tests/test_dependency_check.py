@@ -56,7 +56,7 @@ class TestDependencyCheck(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(any("nmap" in warning for warning in result["warnings"]))
 
-    def test_docx_export_requires_node(self):
+    def test_docx_export_supports_python_docx_fallback(self):
         def fake_which(name: str):
             if name == "node":
                 return None
@@ -65,8 +65,8 @@ class TestDependencyCheck(unittest.TestCase):
         with patch("scanner.core.dependency_check.shutil.which", side_effect=fake_which):
             result = check_dependencies(mode="quick", use_browser=False, need_docx=True)
 
-        self.assertFalse(result["ok"])
-        self.assertTrue(any("Node.js" in err for err in result["errors"]))
+        self.assertTrue(result["ok"])
+
 
 
 if __name__ == "__main__":

@@ -930,6 +930,84 @@ def generate_pdf(
 _JS_SCRIPT = Path(__file__).parent / "generate_report.js"
 
 
+def _generate_docx_python(
+    target: str,
+    findings: list[dict[str, Any]],
+    scan_data: dict[str, Any],
+    mitre_data: dict[str, Any] | None = None,
+    ai_summary: str | None = None,
+) -> bytes:
+    """Fallback pure-Python DOCX generator using python-docx when Node.js is unavailable."""
+    import io
+    import docx
+
+    doc = docx.Document()
+    doc.add_heading("PentaVault — Security Assessment Report", level=0)
+
+    # Executive Summary / Metadata
+    p = doc.add_paragraph()
+    p.add_run("Target: ").bold = True
+    p.add_run(f"{target}\n")
+    p.add_run("Scan Mode: ").bold = True
+    p.add_run(f"{scan_data.get('mode', 'N/A')}\n")
+    p.add_run("Total Findings: ").bold = True
+    p.add_run(f"{len(findings)}\n")
+
+    if ai_summary:
+        doc.add_heading("AI Executive Summary", level=1)
+        doc.add_paragraph(str(ai_summary))
+
+    doc.add_heading("Vulnerability Findings", level=1)
+
+    if not findings:
+        doc.add_paragraph("No security vulnerabilities were identified during this assessment.")
+    else:
+        for idx, f in enumerate(findings, start=1):
+            title = f.get("title", f.get("type", "Vulnerability"))
+            severity = f.get("severity", "Low")
+            doc.add_heading(f"{idx}. {title} [{severity.upper()}]", level=2)
+
+            p = doc.add_paragraph()
+            p.add_run("Affected URL: ").bold = True
+            p.add_run(f"{f.get('affected_url', 'N/A')}\n")
+            p.add_run("Parameter: ").bold = True
+            p.add_run(f"{f.get('parameter', 'N/A')}\n")
+            p.add_run("OWASP Category: ").bold = True
+            p.add_run(f"{f.get('owasp_category', 'N/A')}\n")
+            p.add_run("CVSS Score: ").bold = True
+            p.add_run(f"{f.get('cvss_score', 'N/A')} ({f.get('cvss_vector', 'N/A')})\n")
+
+            if f.get("description"):
+                p_desc = doc.add_paragraph()
+                p_desc.add_run("Description: ").bold = True
+                p_desc.add_run(str(f["description"]))
+
+            if f.get("evidence"):
+                p_ev = doc.add_paragraph()
+                p_ev.add_run("Evidence: ").bold = True
+                p_ev.add_run(str(f["evidence"]))
+
+            if f.get("remediation"):
+                p_rem = doc.add_paragraph()
+                p_rem.add_run("Remediation: ").bold = True
+                p_rem.add_run(str(f["remediation"]))
+
+            mitre_list = f.get("mitre_attack", [])
+            if mitre_list:
+                p_m = doc.add_paragraph()
+                p_m.add_run("MITRE ATT&CK: ").bold = True
+                m_strs = [
+                    f"{m.get('technique', '')} - {m.get('name', '')}"
+                    for m in mitre_list
+                    if isinstance(m, dict)
+                ]
+                p_m.add_run(", ".join(m_strs))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def generate_docx(
     target: str,
     findings: list[dict[str, Any]],
@@ -937,28 +1015,27 @@ def generate_docx(
     mitre_data: dict[str, Any] | None = None,
     ai_summary: str | None = None,
 ) -> bytes:
-    """Generate professional DOCX by calling Node.js docx library."""
-    payload = {
-        "target": target,
-        "findings": findings,
-        "scan_data": scan_data,
-        "mitre_data": mitre_data,
-        "ai_summary": ai_summary,
-    }
-    json_str = json.dumps(payload, default=str)
+    """Generate professional DOCX report using Node.js script with python-docx fallback."""
+    if shutil.which("node") is not None:
+        try:
+            payload = {
+                "target": target,
+                "findings": findings,
+                "scan_data": scan_data,
+                "mitre_data": mitre_data,
+                "ai_summary": ai_summary,
+            }
+            json_str = json.dumps(payload, default=str)
+            result = subprocess.run(
+                ["node", str(_JS_SCRIPT)],
+                input=json_str.encode("utf-8"),
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+        except Exception as exc:
+            log.warning("Node.js DOCX generation failed, using python-docx fallback: %s", exc)
 
-    if shutil.which("node") is None:
-        raise RuntimeError("DOCX generation failed: Node.js runtime not found in PATH")
+    return _generate_docx_python(target, findings, scan_data, mitre_data, ai_summary)
 
-    result = subprocess.run(
-        ["node", str(_JS_SCRIPT)],
-        input=json_str.encode("utf-8"),
-        capture_output=True,
-        timeout=30,
-    )
-
-    if result.returncode != 0:
-        err = result.stderr.decode("utf-8", errors="replace")
-        raise RuntimeError(f"DOCX generation failed: {err}")
-
-    return result.stdout

@@ -1074,8 +1074,15 @@ async def get_owasp_map():
 
 @app.get("/api/mitre")
 async def get_mitre_map():
-    """Return the full MITRE ATT&CK technique reference with metadata."""
-    return MITRE_TECHNIQUES
+    """Return the full MITRE ATT&CK technique reference grouped by tactic."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for tid, info in MITRE_TECHNIQUES.items():
+        tactic_name = info.get("tactic", "Other")
+        if tactic_name not in grouped:
+            grouped[tactic_name] = {}
+        grouped[tactic_name][tid] = info
+    return grouped
+
 
 
 @app.get("/api/mitre/tactics")

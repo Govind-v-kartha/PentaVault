@@ -68,8 +68,16 @@ def check_dependencies(
         if has_chrome and not has_chromedriver:
             warnings.append("chromedriver binary not found on PATH; Selenium manager will attempt automatic driver resolution.")
 
-    if need_docx and not has_node:
-        errors.append("Node.js binary not found on PATH; DOCX report export is unavailable.")
+    has_python_docx = False
+    try:
+        import docx  # noqa: F401
+        has_python_docx = True
+    except ImportError:
+        pass
+
+    if need_docx and not (has_node or has_python_docx):
+        errors.append("Neither Node.js binary nor python-docx library is available; DOCX report export is unavailable.")
+
 
     return {
         "ok": len(errors) == 0,
