@@ -397,7 +397,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 return
 
         # ── Stage 1: Target Input ───────────────────────────────
+        t0 = time.monotonic()
         scan["current_stage"] = "Target Input"
+
         scan["progress"] = 5
         log.info("[%s] Target: %s | Mode: %s | Threads: %d | Timeout: %.1fs | Delay: %.2fs | Browser: %s | Crawl mode: %s | Cookie: %s",
                  scan_id[:8], url, req.mode, req.threads, req.timeout, req.request_delay, req.use_browser, req.crawl_mode, bool(req.cookie))
