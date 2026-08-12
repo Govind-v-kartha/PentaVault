@@ -636,6 +636,21 @@ _reg(Technique(
     is_subtechnique=True, parent_id="T1552",
 ))
 
+_reg(Technique(
+    id="T1552.005", name="Unsecured Credentials: Cloud Instance Metadata API",
+    tactic_ids=["TA0006"],
+    url="https://attack.mitre.org/techniques/T1552/005/",
+    description="Adversaries query or inspect application responses to access cloud instance metadata services (IMDS) containing credentials or system parameters.",
+    platforms=[Platform.SAAS, Platform.IAAS],
+    data_sources=["Application Log: Application Log Content", "Instance: Instance Metadata"],
+    detection="Monitor for unauthorized access or leakage of IMDS responses containing IAM tokens or instance credentials.",
+    mitigations=["M1042 — Disable Instance Metadata Service or enforce IMDSv2"],
+    kill_chain=[KillChainPhase.EXPLOITATION],
+    severity_weight=8.5,
+    is_subtechnique=True, parent_id="T1552",
+))
+
+
 
 # ── TA0007 Discovery ─────────────────────────────────────────────
 
@@ -1080,6 +1095,11 @@ _VULN_RULES: list[_MappingRule] = [
     _MappingRule("secrets detection",          ["T1552.001", "T1555"]),
     _MappingRule("hardcoded secret",           ["T1552.001", "T1555"]),
     _MappingRule("exposed secret",             ["T1552.001", "T1555"]),
+    _MappingRule("cloud misconfiguration",     ["T1530", "T1552.005"]),
+    _MappingRule("cloud storage",              ["T1530"]),
+    _MappingRule("s3 bucket",                  ["T1530"]),
+    _MappingRule("metadata leakage",           ["T1552.005"]),
+
 
 
     # ── Security Headers ───────────────────────────────────────

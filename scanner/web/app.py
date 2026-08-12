@@ -59,7 +59,9 @@ from scanner.core.crawler import CrawlResult, crawl, merge_crawl_results
 from scanner.core.dependency_check import check_dependencies
 from scanner.core.scorer import enrich_findings
 from scanner.modules.secrets_detection import test_secrets_detection
+from scanner.modules.cloud_misconfig import test_cloud_misconfig
 from scanner.modules.sqli import test_sqli
+
 
 from scanner.modules.xss import test_xss
 from scanner.modules.headers import test_headers
@@ -618,8 +620,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 ("Prototype Pollution", lambda: test_prototype_pollution(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("CSV/Formula Injection", lambda: test_csv_formula_injection(endpoints, forms, cookie=req.cookie, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
                 ("SSL/TLS Analysis", lambda: test_ssl_tls(url, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
-
+                ("Cloud Misconfiguration", lambda: test_cloud_misconfig(url, crawl_result=crawl_result, timeout=req.timeout, quick=is_quick, should_stop=should_stop)),
             ]
+
 
 
             if use_browser_vuln:

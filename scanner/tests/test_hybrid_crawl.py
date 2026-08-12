@@ -1,7 +1,8 @@
 import unittest
 
-from scanner.core.crawler import CrawlResult
-from scanner.main import _merge_crawl_results
+from scanner.core.crawler import CrawlResult, merge_crawl_results
+
+
 
 
 class TestHybridCrawlMerge(unittest.TestCase):
@@ -20,7 +21,8 @@ class TestHybridCrawlMerge(unittest.TestCase):
         fallback.js_api_endpoints = ["https://example.com/api/a", "https://example.com/api/b"]
         fallback.authenticated_pages = ["https://example.com/admin", "https://example.com/profile"]
 
-        merged = _merge_crawl_results(primary, fallback)
+        merged = merge_crawl_results(primary, fallback)
+
 
         self.assertEqual(
             merged.endpoints,

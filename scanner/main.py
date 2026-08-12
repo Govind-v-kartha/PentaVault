@@ -70,6 +70,8 @@ from scanner.modules.prototype_pollution import test_prototype_pollution
 from scanner.modules.csv_formula_injection import test_csv_formula_injection
 from scanner.modules.ssl_tls import test_ssl_tls
 from scanner.modules.secrets_detection import test_secrets_detection
+from scanner.modules.cloud_misconfig import test_cloud_misconfig
+
 
 
 
@@ -174,7 +176,9 @@ def _run_web_modules(
     use_browser: bool = False,
     headless: bool = True,
     should_stop=None,
+    crawl_result: CrawlResult | None = None,
 ) -> list[dict[str, Any]]:
+
     """Execute all web vulnerability modules concurrently."""
     log = get_logger("main")
     all_findings: list[dict[str, Any]] = []
@@ -289,6 +293,9 @@ def _run_web_modules(
     def _ssl_tls():
         return test_ssl_tls(base_url, should_stop=should_stop, timeout=timeout, quick=quick)
 
+    def _cloud_misconfig():
+        return test_cloud_misconfig(base_url, crawl_result=crawl_result, should_stop=should_stop, timeout=timeout, quick=quick)
+
     def _timed(name: str, fn):
         """Wrapper that times a module and logs duration."""
         t0 = time.monotonic()
@@ -321,7 +328,9 @@ def _run_web_modules(
         "Prototype Pollution": _prototype_pollution,
         "CSV/Formula Injection": _csv_formula_injection,
         "SSL/TLS Analysis": _ssl_tls,
+        "Cloud Misconfiguration": _cloud_misconfig,
     }
+
 
 
     if use_browser:
@@ -553,7 +562,9 @@ def main() -> None:
             use_browser=use_browser,
             headless=headless,
             should_stop=_should_stop,
+            crawl_result=crawl_result,
         )
+
 
         stage_times.append(("Vulnerability Testing", time.monotonic() - t_stage))
     elif args.mode == "network-only":
