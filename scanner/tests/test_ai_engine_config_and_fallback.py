@@ -109,7 +109,7 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         self.assertIsNotNone(bad_state)
         self.assertTrue(bad_state.disabled)
 
-    def test_call_gemini_applies_cooldown_on_rate_limit(self):
+    def test_call_gemini_applies_cooldown_and_rotates_immediately_on_rate_limit(self):
         req = httpx.Request("POST", "https://example.com")
 
         rate_limited = Mock()
@@ -125,11 +125,18 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
 
         with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, rate_limited, ok],
-        ):
+            side_effect=[rate_limited, ok],
+        ) as mock_post:
             result = ai_engine._call_gemini(["k1", "k2"], "prompt")
 
         self.assertEqual(result, "ok")
+        # Assert 2 calls total: 1 call to k1 (model 1), 0 calls to k1 (model 2), 1 call to k2 (model 1)
+        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_post.call_args_list[0].kwargs["params"]["key"], "k1")
+        self.assertIn("gemini-2.0-flash", mock_post.call_args_list[0].args[0])
+        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k2")
+        self.assertIn("gemini-2.0-flash", mock_post.call_args_list[1].args[0])
+
         k1_state = self._state_for("k1")
         self.assertIsNotNone(k1_state)
         self.assertGreater(k1_state.cooldown_until, time.time())
@@ -154,18 +161,17 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
 
         with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, rate_limited, ok_one, ok_two],
+            side_effect=[rate_limited, ok_one, ok_two],
         ) as mock_post:
             first = ai_engine._call_gemini(["k1", "k2"], "prompt")
             second = ai_engine._call_gemini(["k1", "k2"], "prompt")
 
         self.assertEqual(first, "first")
         self.assertEqual(second, "second")
-        self.assertEqual(mock_post.call_count, 4)
+        self.assertEqual(mock_post.call_count, 3)
         self.assertEqual(mock_post.call_args_list[0].kwargs["params"]["key"], "k1")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k1")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k2")
         self.assertEqual(mock_post.call_args_list[2].kwargs["params"]["key"], "k2")
-        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k2")
 
     def test_call_gemini_reuses_key_after_cooldown_expires(self):
         req = httpx.Request("POST", "https://example.com")
@@ -191,7 +197,7 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
 
         with patch("scanner.utils.ai_engine.load_gemini_models", return_value=["gemini-2.0-flash", "gemini-1.5-flash"]), patch(
             "scanner.utils.ai_engine.httpx.post",
-            side_effect=[rate_limited, rate_limited, ok_a, ok_b, ok_c],
+            side_effect=[rate_limited, ok_a, ok_b, ok_c],
         ) as mock_post:
             first = ai_engine._call_gemini(["k1", "k2"], "prompt")
             second = ai_engine._call_gemini(["k1", "k2"], "prompt")
@@ -203,12 +209,12 @@ class TestAiEngineConfigAndFallback(unittest.TestCase):
         self.assertEqual(first, "a")
         self.assertEqual(second, "b")
         self.assertEqual(third, "c")
-        self.assertEqual(mock_post.call_count, 5)
+        self.assertEqual(mock_post.call_count, 4)
         self.assertEqual(mock_post.call_args_list[0].kwargs["params"]["key"], "k1")
-        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k1")
+        self.assertEqual(mock_post.call_args_list[1].kwargs["params"]["key"], "k2")
         self.assertEqual(mock_post.call_args_list[2].kwargs["params"]["key"], "k2")
-        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k2")
-        self.assertEqual(mock_post.call_args_list[4].kwargs["params"]["key"], "k1")
+        self.assertEqual(mock_post.call_args_list[3].kwargs["params"]["key"], "k1")
+
 
     def test_public_prompt_functions_use_expected_token_limits(self):
         scan = {"target": "https://example.com", "mode": "quick"}

@@ -238,7 +238,7 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
 
                 if status in _RATE_LIMIT_STATUSES:
                     saw_quota_or_rate_limit = True
-                    continue
+                    break
                 if status in _TRANSIENT_STATUSES:
                     saw_transient_failure = True
                     continue
@@ -248,9 +248,10 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
                 if status in _POTENTIALLY_QUOTA_STATUSES:
                     if _classify_403(exc) == "quota":
                         saw_quota_or_rate_limit = True
-                        continue
+                        break
                     _KEY_POOL.mark_invalid_key(key)
                     break
+
                 if _retry_model_only(status):
                     continue
                 raise
