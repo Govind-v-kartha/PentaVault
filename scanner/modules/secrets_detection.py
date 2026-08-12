@@ -12,7 +12,7 @@ from scanner.utils.logger import get_logger
 
 log = get_logger("secrets_detection")
 
-# Table of secret patterns, labels, severities, and default confidence levels
+# Table of secret patterns, labels, severities, CVSS vectors, and default confidence levels
 SECRET_PATTERNS: list[dict[str, Any]] = [
     {
         "type": "AWS Access Key",
@@ -20,6 +20,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "High",
         "confidence": "high",
         "cvss": 7.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     },
     {
         "type": "AWS Secret Key",
@@ -27,6 +28,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "Critical",
         "confidence": "high",
         "cvss": 8.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
     },
     {
         "type": "Google API Key",
@@ -34,6 +36,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "High",
         "confidence": "high",
         "cvss": 7.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     },
     {
         "type": "Generic Bearer Token",
@@ -41,6 +44,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "Medium",
         "confidence": "medium",
         "cvss": 5.3,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
     },
     {
         "type": "GitHub Personal Access Token",
@@ -48,6 +52,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "High",
         "confidence": "high",
         "cvss": 7.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     },
     {
         "type": "Slack Token",
@@ -55,6 +60,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "High",
         "confidence": "high",
         "cvss": 7.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     },
     {
         "type": "Stripe API Key",
@@ -62,6 +68,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "High",
         "confidence": "high",
         "cvss": 7.5,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
     },
     {
         "type": "Generic Private Key Header",
@@ -69,6 +76,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "Critical",
         "confidence": "high",
         "cvss": 9.0,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N",
     },
     {
         "type": "JWT Token",
@@ -76,6 +84,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "Medium",
         "confidence": "medium",
         "cvss": 5.3,
+        "vector": "AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
     },
     {
         "type": "Generic Password Assignment",
@@ -83,6 +92,7 @@ SECRET_PATTERNS: list[dict[str, Any]] = [
         "severity": "Low",
         "confidence": "low",
         "cvss": 3.1,
+        "vector": "AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N",
     },
 ]
 
@@ -111,7 +121,6 @@ def test_secrets_detection(
     should_stop: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Scan crawled HTML page sources and linked JS files for exposed hardcoded secrets."""
-
     log.info("=== Vulnerability Testing: Secrets Detection ===")
     findings: list[dict[str, Any]] = []
     if not crawl_result:
@@ -141,8 +150,10 @@ def test_secrets_detection(
                     "severity": rule["severity"],
                     "confidence": rule["confidence"],
                     "affected_url": source_url,
-                    "owasp_category": "A02:2025 - Cryptographic Failures",
+                    "parameter": "N/A",
+                    "owasp_category": "A02:2025 - Security Misconfiguration",
                     "cvss_score": rule["cvss"],
+                    "cvss_vector": rule["vector"],
                     "description": (
                         f"A hardcoded {secret_type} was discovered exposed in client-accessible content at {source_url}."
                     ),
@@ -196,4 +207,3 @@ def test_secrets_detection(
 
 
 test_secrets_detection.__test__ = False
-

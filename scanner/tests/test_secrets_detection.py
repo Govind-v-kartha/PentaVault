@@ -49,12 +49,16 @@ def test_secrets_detection_positive_matches():
     assert "Exposed Google API Key in Client Code" in types
     assert "Exposed Generic Private Key Header in Client Code" in types
 
-    # Assert secrets are redacted in evidence and payload
+    # Assert secrets are redacted in evidence and payload and schema keys exist
     for f in findings:
         assert "AKIA1234567890ABCDEF" not in f["evidence"]
         assert "AIzaSyAf8dNCOe8DC9Wu2gopEfcFGNq4IgYODv8" not in f["evidence"]
+        assert f["parameter"] == "N/A"
+        assert f["owasp_category"] == "A02:2025 - Security Misconfiguration"
+        assert "cvss_vector" in f and f["cvss_vector"].startswith("AV:N")
         assert "mitre_attack" in f
         assert f["mitre_attack"][0]["technique"] == "T1552.001"
+
 
 
 def test_secrets_detection_deduplication():
