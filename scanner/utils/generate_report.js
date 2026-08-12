@@ -90,14 +90,16 @@ function fieldCell(text, width = 2340) {
   return cell(text, { bg: "F2F2F2", bold: true, color: "000000", width });
 }
 
-function heading1(text) {
+function heading1(text, pageBreak = false) {
   return new Paragraph({
     heading: HeadingLevel.HEADING_1,
+    pageBreakBefore: pageBreak,
     children: [new TextRun({ text, bold: true, size: 32, color: "1F3864", font: "Arial" })],
     spacing: { before: 360, after: 160 },
     border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: "1F3864", space: 4 } }
   });
 }
+
 
 function heading2(text) {
   return new Paragraph({
@@ -552,7 +554,7 @@ async function buildReport(data) {
           ...aiSection,
 
           // 2. SCOPE & METHODOLOGY
-          heading1("2. Scope and Methodology"),
+          heading1("2. Scope and Methodology", true),
           heading2("2.1 Scope"),
           para("The following targets were included in the assessment:"),
           bullet(`Web Application: ${target}`),
@@ -572,19 +574,19 @@ async function buildReport(data) {
           spacer(), spacer(),
 
           // 3. FINDINGS SUMMARY
-          heading1("3. Findings Summary"),
+          heading1("3. Findings Summary", true),
           ...(findings.length === 0
             ? [para("No vulnerabilities were identified during this assessment.")]
             : [new Table({
                 width: { size: TW, type: WidthType.DXA },
                 columnWidths: [936, 4092, 1872, 936, 1524],
                 rows: [
-                  new TableRow({ tableHeader: true, children: [hcell("ID", 936), hcell("Title", 4092), hcell("Component", 1872), hcell("CVSS", 936), hcell("Severity", 1524)] }),
+                  new TableRow({ tableHeader: true, cantSplit: true, children: [hcell("ID", 936), hcell("Title", 4092), hcell("Component", 1872), hcell("CVSS", 936), hcell("Severity", 1524)] }),
                   ...findings.map((f, i) => {
                     const fid = f.id || `VULN-${String(i + 1).padStart(3, "0")}`;
                     const cvss = f.cvss_score != null ? Number(f.cvss_score).toFixed(1) : "-";
                     const component = _extractComponent(f);
-                    return new TableRow({ children: [
+                    return new TableRow({ cantSplit: true, children: [
                       cell(fid, { width: 936 }),
                       cell((f.title || "N/A").slice(0, 50), { width: 4092 }),
                       cell(component, { width: 1872 }),
@@ -598,7 +600,7 @@ async function buildReport(data) {
           spacer(), spacer(),
 
           // 4. DETAILED FINDINGS
-          heading1("4. Detailed Findings"),
+          heading1("4. Detailed Findings", true),
           ...(findings.length === 0
             ? [para("No vulnerabilities were identified during this assessment.")]
             : detailedFindings),
@@ -607,7 +609,7 @@ async function buildReport(data) {
           ...mitreSection,
 
           // REMEDIATION ROADMAP
-          heading1(`${nextSec}. Remediation Roadmap`),
+          heading1(`${nextSec}. Remediation Roadmap`, true),
           para("The following remediation priorities are recommended based on exploitability and business impact:"),
           spacer(),
           ...(findings.length > 0
@@ -615,7 +617,7 @@ async function buildReport(data) {
                 width: { size: TW, type: WidthType.DXA },
                 columnWidths: [936, 4092, 2340, 1992],
                 rows: [
-                  new TableRow({ tableHeader: true, children: [hcell("ID", 936), hcell("Finding", 4092), hcell("Recommended Action", 2340), hcell("Priority", 1992)] }),
+                  new TableRow({ tableHeader: true, cantSplit: true, children: [hcell("ID", 936), hcell("Finding", 4092), hcell("Recommended Action", 2340), hcell("Priority", 1992)] }),
                   ...remRows
                 ]
               })]
@@ -623,12 +625,13 @@ async function buildReport(data) {
           spacer(), spacer(),
 
           // CONCLUSION
-          heading1(`${nextSec + 1}. Conclusion`),
+          heading1(`${nextSec + 1}. Conclusion`, true),
           ...conclusionParas,
           spacer(), spacer(),
 
           // APPENDIX A
-          heading1("Appendix A: CVSS Scoring Criteria"),
+          heading1("Appendix A: CVSS Scoring Criteria", true),
+
           new Table({
             width: { size: TW, type: WidthType.DXA },
             columnWidths: [2340, 2340, 4680],

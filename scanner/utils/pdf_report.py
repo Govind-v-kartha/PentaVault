@@ -937,82 +937,223 @@ def _generate_docx_python(
     mitre_data: dict[str, Any] | None = None,
     ai_summary: str | None = None,
 ) -> bytes:
-    """Fallback pure-Python DOCX generator using python-docx when Node.js is unavailable."""
+    """Fallback pure-Python DOCX generator using python-docx with full table and section styling."""
     import io
     import docx
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
 
     doc = docx.Document()
-    doc.add_heading("PentaVault — Security Assessment Report", level=0)
+
+    # Page setup (A4, 1 inch margins)
+    for sec in doc.sections:
+        sec.top_margin = Inches(1)
+        sec.bottom_margin = Inches(1)
+        sec.left_margin = Inches(1)
+        sec.right_margin = Inches(1)
 
     scan_data = scan_data or {}
     findings = findings or []
+    sc = _sev_counts(findings)
+    total = len(findings)
+    crit_high = sc["Critical"] + sc["High"]
+    mode = str(scan_data.get("mode", "full")).title()
+    now_str = datetime.now().strftime("%B %d, %Y")
 
-    # Executive Summary / Metadata
-    p = doc.add_paragraph()
-    p.add_run("Target: ").bold = True
-    p.add_run(f"{target}\n")
-    p.add_run("Scan Mode: ").bold = True
-    p.add_run(f"{scan_data.get('mode', 'N/A')}\n")
-    p.add_run("Total Findings: ").bold = True
-    p.add_run(f"{len(findings)}\n")
+    def set_cell_background(cell, fill_hex):
+        shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{fill_hex}"/>')
+        cell._tc.get_or_add_tcPr().append(shading)
+
+    # ── COVER PAGE ──
+    h_title = doc.add_paragraph()
+    h_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    h_title.paragraph_format.space_before = Pt(36)
+    run_t = h_title.add_run("VULNERABILITY ASSESSMENT REPORT")
+    run_t.bold = True
+    run_t.font.size = Pt(24)
+    run_t.font.color.rgb = RGBColor(31, 56, 100)
+
+    h_sub = doc.add_paragraph()
+    h_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    h_sub.paragraph_format.space_after = Pt(24)
+    run_s = h_sub.add_run("Web Application Security Assessment")
+    run_s.font.size = Pt(14)
+    run_s.font.color.rgb = RGBColor(46, 117, 182)
+
+    # Cover metadata table
+    tbl_cov = doc.add_table(rows=0, cols=2)
+    tbl_cov.autofit = False
+    meta_items = [
+        ("Target:", target),
+        ("Scan Mode:", mode),
+        ("Assessment Date:", now_str),
+        ("Report Date:", now_str),
+        ("Classification:", "CONFIDENTIAL"),
+        ("Prepared By:", "PentaVault -- Automated VAPT Security Suite"),
+    ]
+    for lbl, val in meta_items:
+        row = tbl_cov.add_row()
+        c0, c1 = row.cells[0], row.cells[1]
+        c0.width = Inches(2.2)
+        c1.width = Inches(4.3)
+        p0 = c0.paragraphs[0]
+        r0 = p0.add_run(lbl)
+        r0.bold = True
+        r0.font.color.rgb = RGBColor(31, 56, 100)
+        p1 = c1.paragraphs[0]
+        r1 = p1.add_run(val)
+        if lbl == "Classification:":
+            r1.bold = True
+            r1.font.color.rgb = RGBColor(192, 0, 0)
+
+    doc.add_page_break()
+
+    # ── 1. EXECUTIVE SUMMARY ──
+    doc.add_heading("1. Executive Summary", level=1)
+    doc.add_paragraph(
+        f"PentaVault was engaged to conduct an automated vulnerability assessment of {target}. "
+        f"The assessment was performed in '{mode}' mode, simulating the perspective of an external threat actor."
+    )
+    if crit_high > 0:
+        doc.add_paragraph(
+            f"The assessment identified {total} vulnerabilities. {crit_high} critical or high-severity "
+            f"vulnerabilities were identified that could result in full compromise of the application. "
+            f"Immediate remediation is strongly recommended."
+        )
+    else:
+        doc.add_paragraph(f"The assessment identified {total} vulnerabilities. No critical or high-severity vulnerabilities were found.")
+
+    # Severity Table
+    tbl_sev = doc.add_table(rows=1, cols=3)
+    hdr_cells = tbl_sev.rows[0].cells
+    hdr_cells[0].text = "Severity"
+    hdr_cells[1].text = "Count"
+    hdr_cells[2].text = "Risk Description"
+    for cell in hdr_cells:
+        set_cell_background(cell, "1F3864")
+        for p in cell.paragraphs:
+            for r in p.runs:
+                r.bold = True
+                r.font.color.rgb = RGBColor(255, 255, 255)
+
+    SEV_HEX = {
+        "Critical": ("C00000", "FFE0E0"),
+        "High": ("FF0000", "FFE0E0"),
+        "Medium": ("FF8C00", "FFF2CC"),
+        "Low": ("00B050", "E2EFDA"),
+        "Info": ("4472C4", "DEEAF1"),
+    }
+    for s_name in ["Critical", "High", "Medium", "Low", "Info"]:
+        row = tbl_sev.add_row()
+        fg, bg = SEV_HEX[s_name]
+        c0, c1, c2 = row.cells[0], row.cells[1], row.cells[2]
+        set_cell_background(c0, bg)
+        set_cell_background(c1, bg)
+        c0.paragraphs[0].add_run(s_name).bold = True
+        c1.paragraphs[0].add_run(str(sc[s_name])).bold = True
+        c2.paragraphs[0].add_run(SEV_DESCS.get(s_name, ""))
 
     if ai_summary:
-        doc.add_heading("AI Executive Summary", level=1)
-        doc.add_paragraph(str(ai_summary))
+        doc.add_heading("AI-Powered Threat Analysis", level=2)
+        doc.add_paragraph(_strip_html(ai_summary))
 
-    doc.add_heading("Vulnerability Findings", level=1)
+    doc.add_page_break()
 
+    # ── 2. SCOPE & METHODOLOGY ──
+    doc.add_heading("2. Scope and Methodology", level=1)
+    doc.add_heading("2.1 Scope", level=2)
+    doc.add_paragraph(f"• Web Application: {target}")
+    doc.add_paragraph(f"• Scan Mode: {mode}")
+    doc.add_paragraph(f"• Authentication: {'Authenticated' if scan_data.get('cookie') else 'Unauthenticated'}")
+
+    doc.add_heading("2.2 Methodology", level=2)
+    doc.add_paragraph("The assessment followed automated vulnerability testing methodology aligned with OWASP Testing Guide v4.2 and PTES standard.")
+
+    doc.add_page_break()
+
+    # ── 3. FINDINGS SUMMARY ──
+    doc.add_heading("3. Findings Summary", level=1)
     if not findings:
-        doc.add_paragraph("No security vulnerabilities were identified during this assessment.")
+        doc.add_paragraph("No vulnerabilities were identified during this assessment.")
+    else:
+        tbl_sum = doc.add_table(rows=1, cols=5)
+        for idx, h_text in enumerate(["ID", "Title", "CVSS", "OWASP Category", "Severity"]):
+            cell = tbl_sum.rows[0].cells[idx]
+            cell.text = h_text
+            set_cell_background(cell, "1F3864")
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.bold = True
+                    r.font.color.rgb = RGBColor(255, 255, 255)
+        for i, f in enumerate(findings):
+            row = tbl_sum.add_row()
+            fid = f.get("id") or f"VULN-{i+1:03d}"
+            title = (f.get("title") or "N/A")[:45]
+            cvss = f.get("cvss_score")
+            cvss_s = f"{cvss:.1f}" if cvss is not None else "-"
+            owasp = (f.get("owasp_category") or "N/A")[:30]
+            sev = str(f.get("severity") or "Info")
+
+            row.cells[0].text = fid
+            row.cells[1].text = title
+            row.cells[2].text = cvss_s
+            row.cells[3].text = owasp
+            row.cells[4].text = sev
+            fg, bg = SEV_HEX.get(sev, SEV_HEX["Info"])
+            set_cell_background(row.cells[4], bg)
+
+    doc.add_page_break()
+
+    # ── 4. DETAILED FINDINGS ──
+    doc.add_heading("4. Detailed Findings", level=1)
+    if not findings:
+        doc.add_paragraph("No security vulnerabilities were identified.")
     else:
         for idx, f in enumerate(findings, start=1):
             if not isinstance(f, dict):
                 continue
+            fid = f.get("id") or f"VULN-{idx:03d}"
             title = f.get("title") or f.get("type") or "Vulnerability"
-            severity = str(f.get("severity") or "Low").upper()
-            doc.add_heading(f"{idx}. {title} [{severity}]", level=2)
+            severity = str(f.get("severity") or "Low")
+            doc.add_heading(f"4.{idx} {fid} -- {title}", level=2)
 
-            p = doc.add_paragraph()
-            p.add_run("Affected URL: ").bold = True
-            p.add_run(f"{f.get('affected_url', 'N/A')}\n")
-            p.add_run("Parameter: ").bold = True
-            p.add_run(f"{f.get('parameter', 'N/A')}\n")
-            p.add_run("OWASP Category: ").bold = True
-            p.add_run(f"{f.get('owasp_category', 'N/A')}\n")
-            p.add_run("CVSS Score: ").bold = True
-            p.add_run(f"{f.get('cvss_score', 'N/A')} ({f.get('cvss_vector', 'N/A')})\n")
+            tbl_det = doc.add_table(rows=0, cols=2)
+            det_rows = [
+                ("Severity", severity),
+                ("CVSS Score", str(f.get("cvss_score") or "N/A")),
+                ("CVSS Vector", str(f.get("cvss_vector") or "N/A")),
+                ("OWASP Category", str(f.get("owasp_category") or "N/A")),
+                ("Affected URL", str(f.get("affected_url") or f.get("url") or "N/A")[:70]),
+                ("Parameter", str(f.get("parameter") or "N/A")),
+            ]
+            for label, val in det_rows:
+                row = tbl_det.add_row()
+                row.cells[0].text = label
+                row.cells[1].text = val
+                set_cell_background(row.cells[0], "F2F2F2")
+                if label == "Severity":
+                    fg, bg = SEV_HEX.get(val, SEV_HEX["Info"])
+                    set_cell_background(row.cells[1], bg)
 
-            if f.get("description"):
-                p_desc = doc.add_paragraph()
-                p_desc.add_run("Description: ").bold = True
-                p_desc.add_run(str(f["description"]))
+            p_desc = doc.add_paragraph()
+            p_desc.add_run("\nDescription:\n").bold = True
+            p_desc.add_run(_build_description(f))
 
-            if f.get("evidence"):
-                p_ev = doc.add_paragraph()
-                p_ev.add_run("Evidence: ").bold = True
-                p_ev.add_run(str(f["evidence"]))
+            p_imp = doc.add_paragraph()
+            p_imp.add_run("Business Impact:\n").bold = True
+            p_imp.add_run(_build_impact(severity, title))
 
-            if f.get("remediation"):
-                p_rem = doc.add_paragraph()
-                p_rem.add_run("Remediation: ").bold = True
-                p_rem.add_run(str(f["remediation"]))
-
-            mitre_list = f.get("mitre_attack") or []
-            if isinstance(mitre_list, list) and mitre_list:
-                p_m = doc.add_paragraph()
-                p_m.add_run("MITRE ATT&CK: ").bold = True
-                m_strs = [
-                    f"{m.get('technique', '')} - {m.get('name', '')}"
-                    for m in mitre_list
-                    if isinstance(m, dict)
-                ]
-                if m_strs:
-                    p_m.add_run(", ".join(m_strs))
-
+            p_rem = doc.add_paragraph()
+            p_rem.add_run("Recommendation:\n").bold = True
+            p_rem.add_run(str(f.get("remediation") or "Apply security best practices."))
+            doc.add_paragraph()
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
 
 
 def generate_docx(
