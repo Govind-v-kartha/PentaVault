@@ -1567,13 +1567,14 @@ async def download_json(scan_id: str):
 
 
 # ── SPA catch-all for React Router ─────────────────────────────────
-@app.get("/{full_path:path}", response_class=HTMLResponse)
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def spa_catch_all(full_path: str):
     """Serve the React SPA for all non-API routes (client-side routing support)."""
     # Don't catch API routes or static assets
     if full_path.startswith(("api/", "static/", "assets/")):
         raise HTTPException(status_code=404)
     return FileResponse(str(_resolve_dashboard_index_path()))
+
 
 
 # ── Entry point ────────────────────────────────────────────────────
