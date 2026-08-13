@@ -243,9 +243,23 @@ def _require_gemini_api_keys() -> list[str]:
         # Retry after reloading .env in case keys were added after server start
         load_dotenv(_PROJECT_DIR / ".env", override=True)
         keys = load_gemini_api_keys()
+
+    provider = (os.environ.get("PENTAVAULT_AI_PROVIDER") or os.environ.get("AI_PROVIDER") or "auto").lower().strip()
+    if provider in ("ollama", "openai_local", "lmstudio", "vllm", "localai"):
+        return ["local-llm-mode"]
+
     if not keys:
+        # Check if Ollama or Local OpenAI is reachable before failing
+        try:
+            ollama_url = (os.environ.get("PENTAVAULT_OLLAMA_URL") or "http://localhost:11434").rstrip("/")
+            resp = httpx.get(f"{ollama_url}/api/tags", timeout=1.0)
+            if resp.status_code == 200:
+                return ["ollama-detected"]
+        except Exception:
+            pass
         _raise_ai_config_error()
     return keys
+
 
 
 def _ai_findings_signature(findings: list[dict[str, Any]]) -> str:

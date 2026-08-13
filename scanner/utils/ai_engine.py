@@ -269,6 +269,103 @@ def _call_gemini(api_key: str | list[str], prompt: str, max_tokens: int = 4096) 
     raise RuntimeError(f"All API keys/models exhausted: {attempts_text}")
 
 
+def _call_ollama(prompt: str, max_tokens: int = 4096) -> str:
+    """Query a local Ollama server (http://localhost:11434)."""
+    base_url = os.environ.get("PENTAVAULT_OLLAMA_URL") or os.environ.get("OLLAMA_HOST") or "http://localhost:11434"
+    base_url = base_url.rstrip("/")
+    if not base_url.startswith("http"):
+        base_url = f"http://{base_url}"
+    model = os.environ.get("PENTAVAULT_OLLAMA_MODEL") or os.environ.get("OLLAMA_MODEL") or "llama3.2"
+
+    url = f"{base_url}/api/generate"
+    try:
+        resp = httpx.post(
+            url,
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": 0.3,
+                },
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("response", "")
+    except Exception as exc:
+        raise RuntimeError(f"Ollama local LLM request failed ({base_url}, model={model}): {exc}") from exc
+
+
+def _call_openai_compatible(prompt: str, max_tokens: int = 4096) -> str:
+    """Query a local OpenAI-compatible API (LM Studio, LocalAI, vLLM)."""
+    base_url = os.environ.get("PENTAVAULT_OPENAI_LOCAL_URL") or os.environ.get("OPENAI_API_BASE") or "http://localhost:1234/v1"
+    base_url = base_url.rstrip("/")
+    model = os.environ.get("PENTAVAULT_OPENAI_LOCAL_MODEL") or os.environ.get("OPENAI_MODEL") or "local-model"
+    api_key = os.environ.get("OPENAI_API_KEY", "not-needed")
+
+    url = f"{base_url}/chat/completions"
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return ""
+    except Exception as exc:
+        raise RuntimeError(f"OpenAI-compatible local LLM request failed ({base_url}): {exc}") from exc
+
+
+def _call_ai(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> str:
+    """Unified AI dispatcher supporting Gemini cloud API with automatic Local LLM failover (Ollama / LocalAI)."""
+    provider = (os.environ.get("PENTAVAULT_AI_PROVIDER") or os.environ.get("AI_PROVIDER") or "auto").lower().strip()
+
+    if provider == "ollama":
+        return _call_ollama(prompt, max_tokens=max_tokens)
+    if provider in ("openai_local", "lmstudio", "vllm", "localai"):
+        return _call_openai_compatible(prompt, max_tokens=max_tokens)
+    if provider == "gemini":
+        return _call_gemini(api_key, prompt, max_tokens=max_tokens)
+
+    # Provider == "auto": Try Gemini first, fallback to Ollama then Local OpenAI if Gemini rate-limits or fails
+    gemini_error = None
+    try:
+        keys = [k for k in (api_key if isinstance(api_key, list) else [api_key]) if k]
+        if keys:
+            return _call_gemini(keys, prompt, max_tokens=max_tokens)
+    except Exception as exc:
+        gemini_error = exc
+
+    # Fallback attempt 1: Local Ollama
+    try:
+        return _call_ollama(prompt, max_tokens=max_tokens)
+    except Exception:
+        pass
+
+    # Fallback attempt 2: Local OpenAI-compatible
+    try:
+        return _call_openai_compatible(prompt, max_tokens=max_tokens)
+    except Exception:
+        pass
+
+    if gemini_error:
+        raise gemini_error
+    raise RuntimeError("No AI provider available (Gemini rate-limited/unconfigured and local LLM not reachable).")
+
+
 def _summarise_findings(findings: list[dict[str, Any]], limit: int = 30) -> str:
     """Build a compact text summary of findings for the AI prompt.
 
@@ -326,7 +423,7 @@ def _build_context(scan_data: dict[str, Any]) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 def ai_threat_analysis(
-    api_key: str,
+    api_key: str | list[str],
     scan_data: dict[str, Any],
     findings: list[dict[str, Any]],
     mitre_breakdown: list[dict[str, Any]],
@@ -372,11 +469,11 @@ Use <strong> tags for section titles.
         ],
     )
 
-    return _call_gemini(api_key, prompt, max_tokens=4096)
+    return _call_ai(api_key, prompt, max_tokens=4096)
 
 
 def ai_remediation(
-    api_key: str,
+    api_key: str | list[str],
     finding: dict[str, Any],
     scan_data: dict[str, Any],
 ) -> str:
@@ -430,11 +527,11 @@ If relevant:
         ],
     )
 
-    return _call_gemini(api_key, prompt, max_tokens=2048)
+    return _call_ai(api_key, prompt, max_tokens=2048)
 
 
 def ai_mitre_explain(
-    api_key: str,
+    api_key: str | list[str],
     technique_id: str,
     technique_name: str,
     tactic: str,
@@ -500,11 +597,11 @@ Provide a comprehensive explanation using this structure:
         ],
     )
 
-    return _call_gemini(api_key, prompt, max_tokens=4096)
+    return _call_ai(api_key, prompt, max_tokens=4096)
 
 
 def ai_executive_summary(
-    api_key: str,
+    api_key: str | list[str],
     scan_data: dict[str, Any],
     findings: list[dict[str, Any]],
 ) -> str:
@@ -549,4 +646,5 @@ Write an executive summary for non-technical leaders with this structure:
         ],
     )
 
-    return _call_gemini(api_key, prompt, max_tokens=2048)
+    return _call_ai(api_key, prompt, max_tokens=2048)
+
