@@ -329,10 +329,78 @@ def _call_openai_compatible(prompt: str, max_tokens: int = 4096) -> str:
         raise RuntimeError(f"OpenAI-compatible local LLM request failed ({base_url}): {exc}") from exc
 
 
+def _call_groq(prompt: str, max_tokens: int = 4096) -> str:
+    """Query Groq cloud API (fast free tier with Llama 3 models)."""
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("No GROQ_API_KEY configured")
+    model = os.environ.get("PENTAVAULT_GROQ_MODEL") or "llama-3.3-70b-versatile"
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return ""
+    except Exception as exc:
+        raise RuntimeError(f"Groq API request failed (model={model}): {exc}") from exc
+
+
+def _call_openrouter(prompt: str, max_tokens: int = 4096) -> str:
+    """Query OpenRouter API."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("No OPENROUTER_API_KEY configured")
+    model = os.environ.get("PENTAVAULT_OPENROUTER_MODEL") or "google/gemini-2.0-flash-lite-001"
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
+    try:
+        resp = httpx.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://pentavault.onrender.com",
+                "X-Title": "PentaVault Scanner",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0.3,
+            },
+            timeout=45,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        choices = data.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "")
+        return ""
+    except Exception as exc:
+        raise RuntimeError(f"OpenRouter API request failed (model={model}): {exc}") from exc
+
+
 def _call_ai(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> str:
-    """Unified AI dispatcher supporting Gemini cloud API with automatic Local LLM failover (Ollama / LocalAI)."""
+    """Unified AI dispatcher supporting Gemini cloud API with automatic Groq/OpenRouter/Local LLM failover."""
     provider = (os.environ.get("PENTAVAULT_AI_PROVIDER") or os.environ.get("AI_PROVIDER") or "auto").lower().strip()
 
+    if provider == "groq":
+        return _call_groq(prompt, max_tokens=max_tokens)
+    if provider == "openrouter":
+        return _call_openrouter(prompt, max_tokens=max_tokens)
     if provider == "ollama":
         return _call_ollama(prompt, max_tokens=max_tokens)
     if provider in ("openai_local", "lmstudio", "vllm", "localai"):
@@ -340,7 +408,7 @@ def _call_ai(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> s
     if provider == "gemini":
         return _call_gemini(api_key, prompt, max_tokens=max_tokens)
 
-    # Provider == "auto": Try Gemini first, fallback to Ollama then Local OpenAI if Gemini rate-limits or fails
+    # Provider == "auto": Try Gemini first -> Groq -> OpenRouter -> Ollama -> Local OpenAI
     gemini_error = None
     try:
         keys = [k for k in (api_key if isinstance(api_key, list) else [api_key]) if k]
@@ -349,13 +417,27 @@ def _call_ai(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> s
     except Exception as exc:
         gemini_error = exc
 
-    # Fallback attempt 1: Local Ollama
+    # Fallback attempt 1: Groq Cloud API
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        try:
+            return _call_groq(prompt, max_tokens=max_tokens)
+        except Exception:
+            pass
+
+    # Fallback attempt 2: OpenRouter Cloud API
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        try:
+            return _call_openrouter(prompt, max_tokens=max_tokens)
+        except Exception:
+            pass
+
+    # Fallback attempt 3: Local Ollama
     try:
         return _call_ollama(prompt, max_tokens=max_tokens)
     except Exception:
         pass
 
-    # Fallback attempt 2: Local OpenAI-compatible
+    # Fallback attempt 4: Local OpenAI-compatible
     try:
         return _call_openai_compatible(prompt, max_tokens=max_tokens)
     except Exception:
@@ -363,7 +445,8 @@ def _call_ai(api_key: str | list[str], prompt: str, max_tokens: int = 4096) -> s
 
     if gemini_error:
         raise gemini_error
-    raise RuntimeError("No AI provider available (Gemini rate-limited/unconfigured and local LLM not reachable).")
+    raise RuntimeError("No AI provider available (Gemini rate-limited/unconfigured and fallback providers not reachable).")
+
 
 
 def _summarise_findings(findings: list[dict[str, Any]], limit: int = 30) -> str:

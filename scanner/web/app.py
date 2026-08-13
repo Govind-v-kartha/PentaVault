@@ -245,8 +245,13 @@ def _require_gemini_api_keys() -> list[str]:
         keys = load_gemini_api_keys()
 
     provider = (os.environ.get("PENTAVAULT_AI_PROVIDER") or os.environ.get("AI_PROVIDER") or "auto").lower().strip()
-    if provider in ("ollama", "openai_local", "lmstudio", "vllm", "localai"):
-        return ["local-llm-mode"]
+    if provider in ("ollama", "openai_local", "lmstudio", "vllm", "localai", "groq", "openrouter"):
+        return ["cloud-or-local-provider-mode"]
+
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        return ["groq-api-key"]
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        return ["openrouter-api-key"]
 
     if not keys:
         # Check if Ollama or Local OpenAI is reachable before failing
@@ -259,6 +264,7 @@ def _require_gemini_api_keys() -> list[str]:
             pass
         _raise_ai_config_error()
     return keys
+
 
 
 
